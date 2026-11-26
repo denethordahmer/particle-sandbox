@@ -5,6 +5,7 @@ import {
 } from "../src/sim";
 import { MATERIAL_NAMES, reaction } from "../src/materials";
 import { resolveOutcome } from "../src/outcomes";
+import { generateWorld } from "../src/worlds";
 
 let passed = 0;
 let failed = 0;
@@ -219,7 +220,7 @@ check("ids round-trip", idOf("Toxic Gas") > 0 && idOf("Molten Metal") > 0);
     }
   }
   check("all reacting pairs have valid symmetric outcomes", bad === 0, `bad=${bad} pairs=${pairs}`);
-  check("reacting pair count matches board", pairs === 621, `pairs=${pairs}`);
+  check("reacting pair count matches board", pairs === 618, `pairs=${pairs}`);
 }
 
 // ---- invariants after chaos: ids stay in range, no crash
@@ -263,6 +264,115 @@ check("ids round-trip", idOf("Toxic Gas") > 0 && idOf("Molten Metal") > 0);
   paint(w, 2, 2, 2, "Sand");
   clearWorld(w);
   check("clear empties world", w.cells.every((c) => c === 0));
+}
+
+// ---- regression: every material that is loose stuff must fall to the floor
+// Bedrock, Stone and Glass are wall materials and stay put on purpose.
+{
+  const STATIC = new Set(["Bedrock", "Stone", "Glass", "Metal", "Obsidian", "Limestone", "Clay"]);
+  const hanging: string[] = [];
+  for (const nm of MATERIAL_NAMES) {
+    if (STATIC.has(nm) || nm === "Fire" || nm === "Spark" || nm === "Lightning" || nm === "Plasma") continue;
+    const w = createWorld(11, 40, 3);
+    setCell(w, 5, 1, nm);
+    for (let t = 0; t < 240; t++) stepWorld(w);
+    // Anything still above the floor has failed to fall.
+    let high = false;
+    for (let y = 0; y < 36; y++) for (let x = 0; x < 11; x++) if (getCell(w, x, y) === nm) high = true;
+    if (high) hanging.push(nm);
+  }
+  check("no loose material hangs in mid-air", hanging.length === 0, hanging.join(", "));
+}
+
+// ---- regression: a powder dropped into gas or water keeps sinking
+{
+  const sunk: string[] = [];
+  for (const fluid of ["Steam", "Cloud", "Water", "Oil"] as const) {
+    const w = createWorld(9, 30, 4);
+    for (let x = 0; x < 9; x++) for (let y = 2; y < 30; y++) paint(w, x, y, 0, fluid);
+    paint(w, 4, 4, 1, "Sand");
+    for (let t = 0; t < 120; t++) stepWorld(w);
+    let low = false;
+    for (let y = 20; y < 30; y++) for (let x = 0; x < 9; x++) if (getCell(w, x, y) === "Sand") low = true;
+    if (!low) sunk.push(fluid);
+  }
+  check("sand sinks through gas and liquid", sunk.length === 0, sunk.join(", "));
+}
+
+// ---- regression: nothing doubles itself against a resting field
+{
+  const growing: string[] = [];
+  for (const nm of MATERIAL_NAMES) {
+    if (nm === "Water" || nm === "Bedrock") continue;
+    const w = createWorld(12, 12, 21);
+    for (let x = 0; x < 12; x++) { paint(w, x, 0, 0, "Bedrock"); paint(w, x, 11, 0, "Bedrock"); }
+    for (let y = 0; y < 12; y++) { paint(w, 0, y, 0, "Bedrock"); paint(w, 11, y, 0, "Bedrock"); }
+    for (let x = 1; x < 11; x++) for (let y = 1; y < 11; y++) paint(w, x, y, 0, x < 6 ? nm : "Water");
+    const before = countMaterial(w, nm);
+    for (let t = 0; t < 250; t++) stepWorld(w);
+    if (countMaterial(w, nm) > before) growing.push(`${nm} ${before}->${countMaterial(w, nm)}`);
+  }
+  check("no material grows against water", growing.length === 0, growing.join(", "));
+}
+
+// ---- regression: heat is spent, so lava and molten metal set solid
+{
+  const w = createWorld(20, 20, 7);
+  for (let x = 0; x < 20; x++) paint(w, x, 19, 0, "Bedrock");
+  paint(w, 10, 10, 2, "Molten Metal");
+  let peak = 0;
+  for (let t = 0; t < 1200; t++) { stepWorld(w); peak = Math.max(peak, countMaterial(w, "Molten Metal")); }
+  check("molten metal cools and does not multiply", peak <= 20 && countMaterial(w, "Molten Metal") === 0,
+    `peak=${peak} left=${countMaterial(w, "Molten Metal")} metal=${countMaterial(w, "Metal")}`);
+}
+
+// ---- regression: lava sets into stone rather than staying hot forever
+{
+  const w = createWorld(20, 20, 8);
+  for (let x = 0; x < 20; x++) paint(w, x, 19, 0, "Bedrock");
+  paint(w, 10, 10, 2, "Lava");
+  for (let t = 0; t < 3000; t++) stepWorld(w);
+  check("lava cools into stone", countMaterial(w, "Lava") === 0 && countMaterial(w, "Stone") > 0,
+    `lava=${countMaterial(w, "Lava")} stone=${countMaterial(w, "Stone")}`);
+}
+
+// ---- regression: frost and snow settle downward, never upward
+{
+  const w = createWorld(15, 40, 9);
+  for (let x = 0; x < 15; x++) for (let y = 30; y < 40; y++) paint(w, x, y, 0, "Bedrock");
+  paint(w, 7, 12, 2, "Frost");
+  let highest = 40;
+  for (let t = 0; t < 40; t++) {
+    stepWorld(w);
+    for (let y = 0; y < 40; y++) for (let x = 0; x < 15; x++) {
+      const c = getCell(w, x, y);
+      if (c === "Snow" || c === "Frost") highest = Math.min(highest, y);
+    }
+  }
+  check("frost does not drift upward like a gas", highest >= 9, `highest cell y=${highest}`);
+}
+
+// ---- regression: a generated random world is still after it appears
+{
+  const moved: string[] = [];
+  for (let seed = 1; seed <= 6; seed++) {
+    const w = createWorld(100, 159, seed);
+    generateWorld(w, seed);
+    const before = Uint8Array.from(w.cells);
+    for (let t = 0; t < 400; t++) stepWorld(w);
+    let changed = 0;
+    for (let i = 0; i < before.length; i++) if (before[i] !== w.cells[i]) changed++;
+    if (changed > 0) moved.push(`seed ${seed}: ${changed}`);
+  }
+  check("random worlds do not collapse on their own", moved.length === 0, moved.join(", "));
+}
+
+// ---- regression: a generated world has terrain, ground and something to use
+{
+  const w = createWorld(100, 159, 42);
+  const theme = generateWorld(w, 42);
+  const solid = countMaterial(w, "Stone") + countMaterial(w, "Soil") + countMaterial(w, "Sand");
+  check("random world is populated", solid > 3000 && countMaterial(w, "Bedrock") > 90, `${theme}, solid=${solid}`);
 }
 
 console.log(`${passed} passed, ${failed} failed`);

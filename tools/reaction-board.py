@@ -16,15 +16,36 @@ CAT_COL = {"structure":(108,170,255), "granular":(232,192,92),
 
 def m(cat, col, state, dens=1.0, heat=0, melt=99, ignite=0, chill=0,
       fuel=0, explode=False, conduct=False, inert=False, soluble=False,
-      absorb=False, acidic=False, acidvuln=0, freezable=False, shatter=False):
+      absorb=False, acidic=False, acidvuln=0, freezable=False, shatter=False,
+      cool=0, coolto=None, mob=1.0, spread=0, drift=0.3, rise=1):
+    """One material and how it disperses.
+
+    Dispersion is per-material, not per-state, because the way a heap of gold
+    nuggets settles has nothing to do with the way a puff of steam spreads.
+
+      mob     powders: 0..1 chance of rolling off a slope each tick. 1 is dry
+              sand at its natural angle of repose; lower is stickier or
+              blockier, so it heaps steeper.
+      spread  liquids: how many cells sideways the liquid creeps per tick when
+              it cannot fall. High is thin and mobile, low is thick.
+      drift   gases: 0..1 chance of sliding sideways per tick instead of
+              climbing. High is a lazy cloud, low is a straight jet.
+      rise    gases: cells climbed per tick. Buoyancy, so lighter gas climbs
+              faster: hydrogen and steam outpace a toxic gas haze.
+      cool    hot materials: ticks of heat before it sets into `coolto`. A hot
+              cell that melts or burns something spends heat faster.
+    """
     return dict(cat=cat, col=col, state=state, dens=dens, heat=heat, melt=melt,
                 ignite=ignite, chill=chill, fuel=fuel, explode=explode,
                 conduct=conduct, inert=inert, soluble=soluble, absorb=absorb,
                 acidic=acidic, acidvuln=acidvuln, freezable=freezable,
-                shatter=shatter)
+                shatter=shatter, cool=cool, coolto=coolto,
+                mob=mob, spread=spread, drift=drift, rise=rise)
 
 M = {}
 # ---- structure
+# Fixed things. Nothing here moves on its own except Wood and Sponge, which are
+# lighter than water and must float up through it.
 M["Stone"]    = m("structure",(107,114,128),"solid", 2.6, melt=2, acidvuln=2, shatter=True)
 M["Bedrock"]  = m("structure",(63,63,70),"solid", 3.0, inert=True)
 M["Ice"]      = m("structure",(165,232,240),"solid", 0.9, melt=1, shatter=True)
@@ -34,51 +55,61 @@ M["Wood"]     = m("structure",(139,90,43),"solid", 0.6, fuel=2, acidvuln=2, shat
 M["Sponge"]   = m("structure",(217,178,106),"solid", 0.3, fuel=1, absorb=True, acidvuln=1)
 M["Clay"]     = m("structure",(176,107,74),"solid", 1.8, melt=2, acidvuln=2, shatter=True)
 # ---- granular
-M["Sand"]     = m("granular",(224,192,112),"powder", 1.6, melt=2, acidvuln=1, shatter=True)
-M["Salt"]     = m("granular",(240,240,240),"powder", 2.2, melt=2, soluble=True, acidvuln=2)
-M["Gravel"]   = m("granular",(141,141,141),"powder", 2.0, melt=2, acidvuln=1, shatter=True)
-M["Soil"]     = m("granular",(107,74,47),"powder", 1.3, acidvuln=2)
-M["Gunpowder"]= m("granular",(74,74,74),"powder", 1.0, fuel=4, explode=True)
-M["Snow"]     = m("granular",(255,255,255),"powder", 0.3, melt=1)
-M["Coal"]     = m("granular",(42,42,42),"powder", 1.4, fuel=2, shatter=True)
+# Dry, free-running grains tumble off a slope at ~35 degrees. Powders that are
+# damp, sticky or blocky heap up steeper, so they read as different stuff.
+M["Sand"]     = m("granular",(224,192,112),"powder", 1.6, melt=2, acidvuln=1, shatter=True, mob=1.0)
+M["Salt"]     = m("granular",(240,240,240),"powder", 2.2, melt=2, soluble=True, acidvuln=2, mob=1.0)
+M["Gravel"]   = m("granular",(141,141,141),"powder", 2.0, melt=2, acidvuln=1, shatter=True, mob=0.9)
+M["Soil"]     = m("granular",(107,74,47),"powder", 1.3, acidvuln=2, mob=0.45)
+M["Gunpowder"]= m("granular",(74,74,74),"powder", 1.0, fuel=4, explode=True, mob=1.0)
+M["Snow"]     = m("granular",(255,255,255),"powder", 0.3, melt=1, mob=0.8)
+M["Coal"]     = m("granular",(42,42,42),"powder", 1.4, fuel=2, shatter=True, mob=0.7)
 # ---- liquid
-M["Water"]    = m("liquid",(59,130,246),"liquid", 1.0, conduct=True, freezable=True)
-M["Oil"]      = m("liquid",(122,96,40),"liquid", 0.8, fuel=3, freezable=True)
-M["Lava"]     = m("liquid",(255,90,31),"liquid", 3.0, heat=3, ignite=3)
-M["Acid"]     = m("liquid",(125,219,42),"liquid", 1.2, acidic=True)
-M["Alkali"]   = m("liquid",(34,211,197),"liquid", 1.1)
-M["Mercury"]  = m("liquid",(192,200,208),"liquid", 13.6, conduct=True, freezable=True)
-M["Tar"]      = m("liquid",(26,26,26),"liquid", 1.15, fuel=3, freezable=True)
+# Thin liquids level out fast and creep a long way; thick ones ooze. Mercury
+# is the most mobile, tar the least.
+M["Water"]    = m("liquid",(59,130,246),"liquid", 1.0, conduct=True, freezable=True, spread=3)
+M["Oil"]      = m("liquid",(122,96,40),"liquid", 0.8, fuel=3, freezable=True, spread=3)
+M["Lava"]     = m("liquid",(255,90,31),"liquid", 3.0, heat=3, ignite=3, spread=1,
+                   cool=2400, coolto="Stone")
+M["Acid"]     = m("liquid",(125,219,42),"liquid", 1.2, acidic=True, spread=3)
+M["Alkali"]   = m("liquid",(34,211,197),"liquid", 1.1, spread=3)
+M["Mercury"]  = m("liquid",(192,200,208),"liquid", 13.6, conduct=True, freezable=True, spread=4)
+M["Tar"]      = m("liquid",(26,26,26),"liquid", 1.15, fuel=3, freezable=True, spread=1)
 # ---- gas & sky
-M["Steam"]    = m("gas",(200,212,224),"gas", 0.1, freezable=True)
-M["Cloud"]    = m("gas",(232,238,245),"gas", 0.05)
-M["Rain"]     = m("gas",(91,155,213),"liquid", 1.0, conduct=True, freezable=True)
-M["Frost"]    = m("gas",(207,233,255),"gas", 0.2, chill=2)
-M["Lightning"]= m("gas",(255,224,102),"energy", 0.0, heat=2, ignite=2)
-M["Plasma"]   = m("gas",(255,79,216),"energy", 0.0, heat=3, ignite=3)
-M["Toxic Gas"]= m("gas",(154,205,50),"gas", 0.4, acidic=True)
+# Buoyancy decides how fast each one climbs; drift decides how much it wanders.
+M["Steam"]    = m("gas",(200,212,224),"gas", 0.1, freezable=True, rise=2, drift=0.5)
+M["Cloud"]    = m("gas",(232,238,245),"gas", 0.05, rise=1, drift=0.6)
+M["Rain"]     = m("gas",(91,155,213),"liquid", 1.0, conduct=True, freezable=True, spread=3)
+M["Frost"]    = m("gas",(207,233,255),"powder", 0.2, chill=2, mob=0.8)
+M["Lightning"]= m("gas",(255,224,102),"energy", 0.0, heat=2, ignite=2, rise=1, drift=0.2)
+M["Plasma"]   = m("gas",(255,79,216),"energy", 0.0, heat=3, ignite=3, rise=2, drift=0.1)
+M["Toxic Gas"]= m("gas",(154,205,50),"gas", 0.4, acidic=True, rise=1, drift=0.55)
 # ---- fire & energy
-M["Fire"]     = m("fire",(255,138,0),"energy", 0.0, heat=1, ignite=2)
-M["Spark"]    = m("fire",(255,225,77),"energy", 0.0, heat=1, ignite=2)
-M["Molten Metal"]=m("fire",(255,154,60),"liquid", 7.0, heat=2, ignite=2, conduct=True)
-M["Phosphor"] = m("fire",(182,255,92),"solid", 1.8, heat=1, ignite=1, fuel=2)
+M["Fire"]     = m("fire",(255,138,0),"energy", 0.0, heat=1, ignite=2, rise=1, drift=0.5)
+M["Spark"]    = m("fire",(255,225,77),"energy", 0.0, heat=1, ignite=2, rise=1, drift=0.2)
+M["Molten Metal"]=m("fire",(255,154,60),"liquid", 7.0, heat=2, ignite=2, conduct=True,
+                   spread=1, cool=900, coolto="Metal")
+M["Phosphor"] = m("fire",(182,255,92),"powder", 1.8, heat=1, ignite=1, fuel=2, mob=0.9)
 # ---- reactive
-M["Foam"]     = m("reactive",(245,245,220),"solid", 0.1, absorb=True)
-M["Bomb"]     = m("reactive",(185,28,28),"solid", 2.0, explode=True, shatter=True)
-M["Hydrogen"] = m("reactive",(219,234,254),"gas", 0.05, fuel=4, explode=True)
-M["Thermite"] = m("reactive",(194,65,12),"solid", 3.5, fuel=3)
-M["Crystal"]  = m("reactive",(126,231,255),"solid", 2.6, melt=2, acidvuln=1, shatter=True)
+# Foam is nearly weightless and barely tumbles; thermite powder is heavy and
+# free-running; wax is soft enough to smear into a heap.
+M["Foam"]     = m("reactive",(245,245,220),"powder", 0.1, absorb=True, mob=0.2)
+M["Bomb"]     = m("reactive",(185,28,28),"powder", 2.0, explode=True, shatter=True, mob=0.9)
+M["Hydrogen"] = m("reactive",(219,234,254),"gas", 0.05, fuel=4, explode=True, rise=3, drift=0.4)
+M["Thermite"] = m("reactive",(194,65,12),"powder", 3.5, fuel=3, mob=1.0)
+M["Crystal"]  = m("reactive",(126,231,255),"powder", 2.6, melt=2, acidvuln=1, shatter=True, mob=0.8)
 M["Obsidian"] = m("reactive",(30,27,46),"solid", 2.4, melt=3, shatter=True)
-M["Quicklime"]= m("reactive",(232,224,208),"powder", 1.0, acidvuln=2)
-M["Dry Ice"]  = m("reactive",(223,246,255),"solid", 1.5, chill=3)
+M["Quicklime"]= m("reactive",(232,224,208),"powder", 1.0, acidvuln=2, mob=0.6)
+M["Dry Ice"]  = m("reactive",(223,246,255),"powder", 1.5, chill=3, mob=0.7)
 # ---- metals
-M["Gold"]     = m("metal",(255,210,74),"solid", 19.3, melt=2)
-M["Iron Ore"] = m("metal",(138,90,60),"solid", 5.0, melt=2, acidvuln=2, shatter=True)
-M["Rust"]     = m("metal",(160,82,45),"powder", 4.0, melt=2, acidvuln=2)
-M["Sulphur"]  = m("metal",(232,212,77),"powder", 2.0, fuel=2, acidvuln=1)
+# Nuggets, chunky ore and rust flake are all heavy and run freely.
+M["Gold"]     = m("metal",(255,210,74),"powder", 19.3, melt=2, mob=0.9)
+M["Iron Ore"] = m("metal",(138,90,60),"powder", 5.0, melt=2, acidvuln=2, shatter=True, mob=0.9)
+M["Rust"]     = m("metal",(160,82,45),"powder", 4.0, melt=2, acidvuln=2, mob=0.9)
+M["Sulphur"]  = m("metal",(232,212,77),"powder", 2.0, fuel=2, acidvuln=1, mob=0.9)
 M["Limestone"]= m("structure",(214,208,190),"solid", 2.5, melt=2, acidvuln=2, shatter=True)
-M["Wax"]      = m("reactive",(246,232,178),"solid", 0.9, melt=1, fuel=2)
-M["Rubber"]   = m("structure",(46,44,48),"solid", 1.1, melt=1, fuel=2)
+M["Wax"]      = m("reactive",(246,232,178),"powder", 0.9, melt=1, fuel=2, mob=0.35)
+M["Rubber"]   = m("structure",(46,44,48),"powder", 1.1, melt=1, fuel=2, mob=0.4)
 
 ORDER = ["Stone","Bedrock","Ice","Glass","Metal","Wood","Sponge","Clay",
          "Limestone","Rubber",
@@ -107,7 +138,7 @@ E = [
 ("Water","Clay","R","softens to mud"),("Water","Sponge","R","soaked up"),
 ("Water","Metal","R","rusts"),("Water","Iron Ore","R","rusts"),
 ("Water","Gunpowder","X","ruined"),("Water","Bomb","X","dud charge"),
-("Water","Dry Ice","R","rolling fog"),("Water","Ice","F","freezes solid"),
+("Water","Dry Ice","R","rolling fog"),('Water','Ice', "." , "ice floats, does not freeze the pool"),
 ("Water","Snow","F","freezes solid"),("Water","Frost","F","freezes solid"),
 ("Water","Steam","R","condenses"),("Water","Cloud","R","feeds the cloud"),
 ("Water","Rain","R","merges"),("Water","Mercury","^","mercury sinks through"),
@@ -497,7 +528,7 @@ E = [
 ("Ice","Salt","M","melts it"),("Ice","Fire","M","melts"),
 ("Ice","Lava","R","steam + stone"),("Ice","Steam","R","condenses"),
 ("Ice","Plasma","M","sublimates"),("Ice","Bomb","X","shatters"),
-("Ice","Lightning","X","shatters"),("Ice","Water","F","freezes it"),
+("Ice","Lightning","X","shatters"),('Ice','Water', "^" , "floats"),
 ("Ice","Acid","M","melts"),("Ice","Alkali","M","melts"),
 ("Ice","Stone","." ,"no reaction"),("Ice","Metal","." ,"no reaction"),
 ("Ice","Clay","." ,"no reaction"),("Ice","Snow","R","packs together"),

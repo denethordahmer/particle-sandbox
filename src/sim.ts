@@ -58,6 +58,12 @@ export interface World {
   readonly moved: Uint8Array;
   /** Cells already reacted this tick (separate from movement). */
   readonly reacted: Uint8Array;
+  /**
+   * Ticks of heat left for materials that set when they cool (lava, molten
+   * metal). 0 for everything else. Contact with something it melts or burns
+   * spends heat faster, so a pour does finite work instead of multiplying.
+   */
+  readonly heat: Uint16Array;
   tick: number;
   readonly random: () => number;
 }
@@ -72,6 +78,7 @@ export function createWorld(width: number, height: number, seed = 1): World {
     life: new Uint16Array(n),
     moved: new Uint8Array(n),
     reacted: new Uint8Array(n),
+    heat: new Uint16Array(n),
     tick: 0,
     random: makeRandom(seed),
   };
@@ -92,12 +99,19 @@ function lifeFor(id: CellId, random: () => number): number {
   return 0;
 }
 
+/** Heat left before a hot material sets. Only meaningful for `cool` materials. */
+function heatFor(id: CellId): number {
+  if (id === EMPTY) return 0;
+  return PROPS[id - 1]!.cool;
+}
+
 export function setCell(w: World, x: number, y: number, name: MaterialName | null): void {
   if (x < 0 || y < 0 || x >= w.width || y >= w.height) return;
   const i = y * w.width + x;
   const id = name === null ? EMPTY : idOf(name);
   w.cells[i] = id;
   w.life[i] = lifeFor(id, w.random);
+  w.heat[i] = heatFor(id);
 }
 
 export function getCell(w: World, x: number, y: number): MaterialName | null {
@@ -127,12 +141,18 @@ function swap(w: World, i: number, j: number): void {
   const l = w.life[i]!;
   w.life[i] = w.life[j]!;
   w.life[j] = l;
+  const h = w.heat[i]!;
+  w.heat[i] = w.heat[j]!;
+  w.heat[j] = h;
   w.moved[i] = 1;
   w.moved[j] = 1;
 }
 
 /**
- * Move into the cell below: empty first, else sink through a lighter fluid.
+ * Move into the cell below: empty first, else sink through lighter stuff.
+ * Anything denser than a liquid or gas below it pushes through, so a grain
+ * dropped into steam or water keeps falling instead of perching on the
+ * surface and looking like it is stuck in mid-air.
  * Densities must differ by more than 0.05 so close pairs still separate.
  */
 function tryDown(w: World, x: number, y: number): boolean {
@@ -144,14 +164,16 @@ function tryDown(w: World, x: number, y: number): boolean {
   if (w.moved[j] === 1) return false;
   const mine = PROPS[w.cells[i]! - 1]!;
   const theirs = PROPS[other - 1]!;
-  if (isFluid(theirs) && isFluid(mine) && mine.dens > theirs.dens + 0.05) {
+  if (isDisplaceable(theirs) && mine.dens > theirs.dens + 0.05) {
     return swapInto(w, i, j);
   }
   return false;
 }
 
 /**
- * Move into the cell above: empty first, else float up through a denser fluid.
+ * Move into the cell above: empty first, else float up through denser stuff.
+ * A gas escapes upward through powder as well as liquid, so a puff buried in
+ * a sandpile is not trapped forever.
  */
 function tryUp(w: World, x: number, y: number): boolean {
   if (!inBounds(w, x, y - 1)) return false;
@@ -165,6 +187,11 @@ function tryUp(w: World, x: number, y: number): boolean {
   if (isFluid(theirs) && isFluid(mine) && mine.dens < theirs.dens - 0.05) {
     return swapInto(w, i, j);
   }
+  // Steam and other gases push up through loose powder instead of being
+  // sealed under it.
+  if (mine.state === "gas" && theirs.state === "powder" && mine.dens < theirs.dens) {
+    return swapInto(w, i, j);
+  }
   return false;
 }
 
@@ -172,9 +199,37 @@ function isFluid(p: MaterialProps): boolean {
   return p.state === "liquid" || p.state === "gas";
 }
 
+/**
+ * Cells a denser material may push through. Loose powder counts: a grain of
+ * sand dropped into steam or water must keep sinking, otherwise it perches on
+ * the surface and reads as stuck in mid-air. Solid structure is never pushed.
+ */
+function isDisplaceable(p: MaterialProps): boolean {
+  return p.state === "liquid" || p.state === "gas" || p.state === "powder";
+}
+
 function swapInto(w: World, i: number, j: number): boolean {
   swap(w, i, j);
   return true;
+}
+
+/**
+ * Fixed structure never moves. A solid that is lighter than water (wood, ice,
+ * sponge) still has to obey gravity: it falls through empty space, and floats
+ * up through a denser liquid. That is the only motion a solid has.
+ */
+function moveSolid(w: World, x: number, y: number, mine: MaterialProps): void {
+  if (mine.dens >= 1.0) return;
+  const i = y * w.width + x;
+  if (tryDown(w, x, y)) return;
+  if (!inBounds(w, x, y - 1)) return;
+  const j = (y - 1) * w.width + x;
+  const other = w.cells[j]!;
+  if (other === EMPTY || w.moved[j] === 1) return;
+  const theirs = PROPS[other - 1]!;
+  if (theirs.state === "liquid" && mine.dens < theirs.dens - 0.05) {
+    swapInto(w, i, j);
+  }
 }
 
 /** Swap into an empty, unmoved neighbour cell. */
@@ -185,16 +240,24 @@ function tryMove(w: World, x: number, y: number, nx: number, ny: number): boolea
   return swapInto(w, y * w.width + x, j);
 }
 
-function movePowder(w: World, x: number, y: number): void {
+/**
+ * Powders tumble down a slope with a per-material chance, so a steep pile of
+ * wet soil or wax holds its shape while dry sand runs to its natural angle.
+ */
+function movePowder(w: World, x: number, y: number, mob: number): void {
   if (tryDown(w, x, y)) return;
   const dir = w.random() < 0.5 ? 1 : -1;
   // Diagonal slide only into empty cells, so grains tumble off a pile and
   // then come to rest instead of skating along the floor.
-  if (tryMove(w, x, y, x + dir, y + 1)) return;
-  tryMove(w, x, y, x - dir, y + 1);
+  if (w.random() < mob && tryMove(w, x, y, x + dir, y + 1)) return;
+  if (w.random() < mob && tryMove(w, x, y, x - dir, y + 1)) return;
 }
 
-function moveLiquid(w: World, x: number, y: number): void {
+/**
+ * Liquids fall, then roll off a slope, then creep sideways up to their own
+ * spread distance. Thin liquids level out; tar and lava ooze.
+ */
+function moveLiquid(w: World, x: number, y: number, spread: number): void {
   if (tryDown(w, x, y)) return;
   const dir = w.random() < 0.5 ? 1 : -1;
   if (tryMove(w, x, y, x + dir, y + 1)) return;
@@ -203,7 +266,7 @@ function moveLiquid(w: World, x: number, y: number): void {
   const i = y * w.width + x;
   for (const d of [dir, -dir]) {
     let target = -1;
-    for (let step = 1; step <= 3; step++) {
+    for (let step = 1; step <= spread; step++) {
       const nx = x + d * step;
       if (!inBounds(w, nx, y)) break;
       const j = y * w.width + nx;
@@ -217,9 +280,15 @@ function moveLiquid(w: World, x: number, y: number): void {
   }
 }
 
-function moveGas(w: World, x: number, y: number, drift: number): void {
+function moveGas(w: World, x: number, y: number, drift: number, rise: number): void {
   // Rise first so gas climbs out of liquid rather than skimming sideways.
-  if (tryUp(w, x, y)) return;
+  // `rise` is buoyancy: light gas leaps up several cells, a heavy haze crawls.
+  let climbed = 0;
+  while (climbed < rise && tryUp(w, x, y)) {
+    y -= 1;
+    climbed++;
+  }
+  if (climbed > 0) return;
   const dir = w.random() < 0.5 ? 1 : -1;
   if (tryMove(w, x, y, x + dir, y - 1)) return;
   if (tryMove(w, x, y, x - dir, y - 1)) return;
@@ -240,18 +309,19 @@ function stepMovement(w: World): void {
       const p = PROPS[id - 1]!;
       switch (p.state) {
         case "powder":
-          movePowder(w, x, y);
+          movePowder(w, x, y, p.mob);
           break;
         case "liquid":
-          moveLiquid(w, x, y);
+          moveLiquid(w, x, y, Math.max(1, p.spread));
           break;
         case "gas":
-          moveGas(w, x, y, 0.3);
-          break;
         case "energy":
-          moveGas(w, x, y, 0.5);
+          moveGas(w, x, y, p.drift, Math.max(1, p.rise));
           break;
         case "solid":
+          // Fixed structure never moves on its own. Light solids do float up
+          // through a denser liquid (wood, sponge), which is all a solid does.
+          moveSolid(w, x, y, p);
           break;
       }
     }
@@ -262,20 +332,36 @@ function decay(w: World): void {
   for (let i = 0; i < w.cells.length; i++) {
     const id = w.cells[i]!;
     if (id === EMPTY) continue;
-    const state = PROPS[id - 1]!.state;
-    if (state !== "gas" && state !== "energy") continue;
-    const l = w.life[i]!;
-    if (l <= 1) {
-      // Steam condenses back to water sometimes; other gases just fade.
-      if (nameOf(id) === "Steam" && w.random() < 0.25) {
+    const p = PROPS[id - 1]!;
+
+    if (p.state === "gas" || p.state === "energy") {
+      const l = w.life[i]!;
+      if (l > 1) {
+        w.life[i] = l - 1;
+      } else if (p.state === "gas" && nameOf(id) === "Steam" && w.random() < 0.25) {
+        // Steam condenses back into water; other gases just fade.
         w.cells[i] = idOf("Water");
         w.life[i] = 0;
       } else {
         w.cells[i] = EMPTY;
         w.life[i] = 0;
       }
-    } else {
-      w.life[i] = l - 1;
+      continue;
+    }
+
+    // Hot materials set back into a solid once their heat runs out, so a
+    // pour of lava or molten metal cools instead of staying hot forever.
+    if (p.cool > 0) {
+      const h = w.heat[i]!;
+      if (h > 1) {
+        w.heat[i] = h - 1;
+      } else if (p.coolto) {
+        w.cells[i] = idOf(p.coolto);
+        w.life[i] = lifeFor(w.cells[i]!, w.random);
+        w.heat[i] = heatFor(w.cells[i]!);
+      } else {
+        w.heat[i] = 0;
+      }
     }
   }
 }
@@ -288,6 +374,7 @@ function applyResult(w: World, i: number, name: MaterialName | null): void {
   const id = name === null ? EMPTY : idOf(name);
   w.cells[i] = id;
   w.life[i] = lifeFor(id, w.random);
+  w.heat[i] = heatFor(id);
   w.reacted[i] = 1;
 }
 
@@ -319,8 +406,26 @@ function stepReactions(w: World): void {
         const aChanged = out.a !== aName;
         const bChanged = out.b !== bName;
         if (!aChanged && !bChanged) continue;
+        // Melting spends heat. When a hot cell changes its partner, the source pays a fixed cost and the new cell gets only
+        // half of it. A cell without the heat to pay cannot melt anything, so a
+        // pour does a bounded amount of work instead of eating the whole scene.
+        let spendFrom = -1;
+        let cost = 0;
+        if (bChanged && !aChanged && PROPS[aId - 1]!.cool > 0) {
+          spendFrom = i;
+          cost = Math.floor(PROPS[aId - 1]!.cool / 6);
+        } else if (aChanged && !bChanged && PROPS[bId - 1]!.cool > 0) {
+          spendFrom = j;
+          cost = Math.floor(PROPS[bId - 1]!.cool / 6);
+        }
+        if (spendFrom >= 0 && w.heat[spendFrom]! <= cost) continue;
         if (aChanged) applyResult(w, i, out.a);
         if (bChanged) applyResult(w, j, out.b);
+        if (spendFrom >= 0) {
+          const child = spendFrom === i ? j : i;
+          w.heat[spendFrom] = w.heat[spendFrom]! - cost;
+          if (PROPS[w.cells[child]! - 1]?.cool) w.heat[child] = Math.max(1, Math.floor(cost / 2));
+        }
         break; // one reaction per cell per tick
       }
     }
@@ -345,5 +450,6 @@ export function countMaterial(w: World, name: MaterialName): number {
 export function clearWorld(w: World): void {
   w.cells.fill(EMPTY);
   w.life.fill(0);
+  w.heat.fill(0);
   w.moved.fill(0);
 }

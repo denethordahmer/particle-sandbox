@@ -11,6 +11,7 @@ import {
   EMPTY,
   type World,
 } from "./sim";
+import { generateWorld } from "./worlds";
 import { createRenderer, worldSizeFor, type Renderer } from "./render";
 
 /** Aim for roughly this many cells across the short edge of the screen. */
@@ -44,8 +45,10 @@ const brushEl = document.querySelector<HTMLInputElement>("#brush")!;
 const brushValEl = document.querySelector<HTMLSpanElement>("#brushVal")!;
 const eraseEl = document.querySelector<HTMLButtonElement>("#erase")!;
 const pauseEl = document.querySelector<HTMLButtonElement>("#pause")!;
+const randomEl = document.querySelector<HTMLButtonElement>("#random")!;
 const clearEl = document.querySelector<HTMLButtonElement>("#clear")!;
 const hintEl = document.querySelector<HTMLParagraphElement>("#hint")!;
+const titleEl = document.querySelector<HTMLDivElement>("#title")!;
 const ringEl = document.querySelector<HTMLDivElement>("#ring")!;
 const currentDotEl = document.querySelector<HTMLElement>("#current .dot")!;
 const currentNameEl = document.querySelector<HTMLSpanElement>("#currentName")!;
@@ -56,7 +59,7 @@ let erasing = false;
 let paused = false;
 let brush = Number(brushEl.value);
 
-let world: World;
+let world: World = null as unknown as World;
 let renderer: Renderer;
 
 function rgbCss(c: readonly [number, number, number]): string {
@@ -85,6 +88,7 @@ function resizeWorld(next: { width: number; height: number }): void {
         const di = dstY * nextWorld.width + x;
         nextWorld.cells[di] = id;
         nextWorld.life[di] = prev.life[srcY * prev.width + x]!;
+        nextWorld.heat[di] = prev.heat[srcY * prev.width + x]!;
       }
     }
     // Keep the seed stream moving so a resize does not replay the same rolls.
@@ -207,7 +211,13 @@ function toCell(clientX: number, clientY: number): { x: number; y: number } | nu
   return { x, y };
 }
 
+/** The title card is an overlay only: the sandbox is live underneath it. */
+function dismissTitle(): void {
+  if (!titleEl.classList.contains("gone")) titleEl.classList.add("gone");
+}
+
 function stampAt(x: number, y: number): void {
+  dismissTitle();
   paint(world, x, y, brush, erasing ? null : selected);
   if (hintEl && !hintEl.classList.contains("gone")) hintEl.classList.add("gone");
 }
@@ -304,6 +314,11 @@ pauseEl.addEventListener("click", () => {
   pauseEl.setAttribute("aria-pressed", paused ? "true" : "false");
 });
 
+randomEl.addEventListener("click", () => {
+  generateWorld(world, Math.floor(Math.random() * 0x7fffffff));
+  hintEl.classList.add("gone");
+});
+
 clearEl.addEventListener("click", () => {
   clearWorld(world);
   hintEl.classList.remove("gone");
@@ -332,19 +347,24 @@ function frame(now: number): void {
 
   renderer.draw(world);
   requestAnimationFrame(frame);
+
+// The card clears itself after a few seconds so it never becomes a gate, and
+// the first touch anywhere (even before painting) clears it straight away.
+window.setTimeout(dismissTitle, 3600);
+for (const type of ["pointerdown", "keydown"]) {
+  window.addEventListener(type, dismissTitle, { once: true, passive: true });
+}
 }
 
 // Pause automatically when the tab or app goes away, and catch up on return
 // without a burst of simulation.
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    paused = true;
-    pauseEl.textContent = "Resume";
-    pauseEl.setAttribute("aria-pressed", "true");
-  }
+  // The loop already stops while the tab is hidden, so the player's own Pause
+  // choice is left alone and the sim carries on when they come back.
   lastFrame = performance.now();
   accumulator = 0;
 });
+
 
 // ---------------------------------------------------------------- boot
 
@@ -356,62 +376,10 @@ window.addEventListener("resize", () => {
   }, 120);
 });
 
-/** A little starting scene so the stage is not empty on load. */
-function seedStartingScene(): void {
-  const w = world.width;
-  const h = world.height;
-  const floor = h - 1;
-
-  // Bedrock floor, solid end to end so poured material stays in view.
-  for (let x = 0; x < w; x++) paint(world, x, floor, 0, "Bedrock");
-
-  // Left: a stone bluff with a soil skirt, roughly a quarter of the screen.
-  const bluffW = Math.floor(w * 0.3);
-  const bluffTop = Math.round(h * 0.68);
-  for (let x = 0; x < bluffW; x++) {
-    const t = x / bluffW;
-    const top = Math.round(bluffTop + Math.sin(t * Math.PI) * h * 0.14);
-    for (let y = top; y < floor; y++) {
-      // Stone core with a soil crust on the surface.
-      paint(world, x, y, 0, y < top + 2 ? "Soil" : "Stone");
-    }
-  }
-
-  // Right: a sand dune, lower and wider.
-  const duneStart = Math.floor(w * 0.66);
-  const duneTop = Math.round(h * 0.82);
-  for (let x = duneStart; x < w; x++) {
-    const t = (x - duneStart) / (w - duneStart);
-    const top = Math.round(duneTop + (1 - Math.cos(t * Math.PI * 0.9)) * h * 0.11);
-    for (let y = top; y < floor; y++) paint(world, x, y, 0, "Sand");
-  }
-
-  // Middle: a stone basin holding water clear of the soil, so the soil does
-  // not soak the pool up on the first tick.
-  const basinL = Math.floor(w * 0.38);
-  const basinR = Math.floor(w * 0.6);
-  const basinTop = floor - Math.round(h * 0.13);
-  for (let y = basinTop; y < floor; y++) {
-    paint(world, basinL, y, 0, "Stone");
-    paint(world, basinR, y, 0, "Stone");
-  }
-  for (let x = basinL + 1; x < basinR; x++) {
-    for (let y = basinTop + 2; y < floor; y++) paint(world, x, y, 0, "Water");
-  }
-
-  // A few logs standing in the soil crust, so fire has fuel to find.
-  for (const tx of [0.07, 0.15, 0.23]) {
-    const x = Math.floor(w * tx);
-    const t = x / bluffW;
-    const ground = Math.round(bluffTop + Math.sin(t * Math.PI) * h * 0.14);
-    for (let i = 0; i < 5; i++) paint(world, x, ground - 1 - i, 0, "Wood");
-  }
-}
-
 buildTabs();
 buildPicker();
 layout();
-seedStartingScene();
+generateWorld(world, Math.floor(Math.random() * 0x7fffffff), "meadow");
 selectMaterial(selected);
 brushValEl.textContent = String(brush);
 requestAnimationFrame(frame);

@@ -34,6 +34,18 @@ export interface MaterialProps {
   readonly chill: number;
   readonly fuel: number;
   readonly acidvuln: number;
+  /** Ticks of heat left before it sets; 0 means it never sets. */
+  readonly cool: number;
+  /** What it becomes when its heat runs out. */
+  readonly coolto: MaterialName | null;
+  /** Powders: 0..1 chance of rolling off a slope each tick. */
+  readonly mob: number;
+  /** Liquids: cells of sideways creep per tick when it cannot fall. */
+  readonly spread: number;
+  /** Gases: 0..1 chance of drifting sideways instead of climbing. */
+  readonly drift: number;
+  /** Gases: cells climbed per tick (buoyancy). */
+  readonly rise: number;
   readonly explode: boolean;
   readonly conduct: boolean;
   readonly inert: boolean;
@@ -57,50 +69,51 @@ const SPECS: Record<MaterialName, MaterialSpec> = {
   "Sponge": { cat: "structure", col: [217, 178, 106], state: "solid", dens: 0.3, fuel: 1, acidvuln: 1, absorb: true },
   "Clay": { cat: "structure", col: [176, 107, 74], state: "solid", dens: 1.8, melt: 2, acidvuln: 2, shatter: true },
   "Limestone": { cat: "structure", col: [214, 208, 190], state: "solid", dens: 2.5, melt: 2, acidvuln: 2, shatter: true },
-  "Rubber": { cat: "structure", col: [46, 44, 48], state: "solid", dens: 1.1, melt: 1, fuel: 2 },
+  "Rubber": { cat: "structure", col: [46, 44, 48], state: "powder", dens: 1.1, melt: 1, fuel: 2, mob: 0.4 },
   "Sand": { cat: "granular", col: [224, 192, 112], state: "powder", dens: 1.6, melt: 2, acidvuln: 1, shatter: true },
   "Salt": { cat: "granular", col: [240, 240, 240], state: "powder", dens: 2.2, melt: 2, acidvuln: 2, soluble: true },
-  "Gravel": { cat: "granular", col: [141, 141, 141], state: "powder", dens: 2.0, melt: 2, acidvuln: 1, shatter: true },
-  "Soil": { cat: "granular", col: [107, 74, 47], state: "powder", dens: 1.3, acidvuln: 2 },
+  "Gravel": { cat: "granular", col: [141, 141, 141], state: "powder", dens: 2.0, melt: 2, acidvuln: 1, mob: 0.9, shatter: true },
+  "Soil": { cat: "granular", col: [107, 74, 47], state: "powder", dens: 1.3, acidvuln: 2, mob: 0.45 },
   "Gunpowder": { cat: "granular", col: [74, 74, 74], state: "powder", fuel: 4, explode: true },
-  "Snow": { cat: "granular", col: [255, 255, 255], state: "powder", dens: 0.3, melt: 1 },
-  "Coal": { cat: "granular", col: [42, 42, 42], state: "powder", dens: 1.4, fuel: 2, shatter: true },
-  "Water": { cat: "liquid", col: [59, 130, 246], state: "liquid", conduct: true, freezable: true },
-  "Oil": { cat: "liquid", col: [122, 96, 40], state: "liquid", dens: 0.8, fuel: 3, freezable: true },
-  "Lava": { cat: "liquid", col: [255, 90, 31], state: "liquid", dens: 3.0, heat: 3, ignite: 3 },
-  "Acid": { cat: "liquid", col: [125, 219, 42], state: "liquid", dens: 1.2, acidic: true },
-  "Alkali": { cat: "liquid", col: [34, 211, 197], state: "liquid", dens: 1.1 },
-  "Mercury": { cat: "liquid", col: [192, 200, 208], state: "liquid", dens: 13.6, conduct: true, freezable: true },
-  "Tar": { cat: "liquid", col: [26, 26, 26], state: "liquid", dens: 1.15, fuel: 3, freezable: true },
-  "Steam": { cat: "gas", col: [200, 212, 224], state: "gas", dens: 0.1, freezable: true },
-  "Cloud": { cat: "gas", col: [232, 238, 245], state: "gas", dens: 0.05 },
-  "Rain": { cat: "gas", col: [91, 155, 213], state: "liquid", conduct: true, freezable: true },
-  "Frost": { cat: "gas", col: [207, 233, 255], state: "gas", dens: 0.2, chill: 2 },
-  "Lightning": { cat: "gas", col: [255, 224, 102], state: "energy", dens: 0.0, heat: 2, ignite: 2 },
-  "Plasma": { cat: "gas", col: [255, 79, 216], state: "energy", dens: 0.0, heat: 3, ignite: 3 },
-  "Toxic Gas": { cat: "gas", col: [154, 205, 50], state: "gas", dens: 0.4, acidic: true },
-  "Fire": { cat: "fire", col: [255, 138, 0], state: "energy", dens: 0.0, heat: 1, ignite: 2 },
-  "Spark": { cat: "fire", col: [255, 225, 77], state: "energy", dens: 0.0, heat: 1, ignite: 2 },
-  "Molten Metal": { cat: "fire", col: [255, 154, 60], state: "liquid", dens: 7.0, heat: 2, ignite: 2, conduct: true },
-  "Phosphor": { cat: "fire", col: [182, 255, 92], state: "solid", dens: 1.8, heat: 1, ignite: 1, fuel: 2 },
-  "Foam": { cat: "reactive", col: [245, 245, 220], state: "solid", dens: 0.1, absorb: true },
-  "Bomb": { cat: "reactive", col: [185, 28, 28], state: "solid", dens: 2.0, explode: true, shatter: true },
-  "Hydrogen": { cat: "reactive", col: [219, 234, 254], state: "gas", dens: 0.05, fuel: 4, explode: true },
-  "Thermite": { cat: "reactive", col: [194, 65, 12], state: "solid", dens: 3.5, fuel: 3 },
-  "Crystal": { cat: "reactive", col: [126, 231, 255], state: "solid", dens: 2.6, melt: 2, acidvuln: 1, shatter: true },
+  "Snow": { cat: "granular", col: [255, 255, 255], state: "powder", dens: 0.3, melt: 1, mob: 0.8 },
+  "Coal": { cat: "granular", col: [42, 42, 42], state: "powder", dens: 1.4, fuel: 2, mob: 0.7, shatter: true },
+  "Water": { cat: "liquid", col: [59, 130, 246], state: "liquid", spread: 3, conduct: true, freezable: true },
+  "Oil": { cat: "liquid", col: [122, 96, 40], state: "liquid", dens: 0.8, fuel: 3, spread: 3, freezable: true },
+  "Lava": { cat: "liquid", col: [255, 90, 31], state: "liquid", dens: 3.0, heat: 3, ignite: 3, cool: 2400, spread: 1, coolto: "Stone" },
+  "Acid": { cat: "liquid", col: [125, 219, 42], state: "liquid", dens: 1.2, spread: 3, acidic: true },
+  "Alkali": { cat: "liquid", col: [34, 211, 197], state: "liquid", dens: 1.1, spread: 3 },
+  "Mercury": { cat: "liquid", col: [192, 200, 208], state: "liquid", dens: 13.6, spread: 4, conduct: true, freezable: true },
+  "Tar": { cat: "liquid", col: [26, 26, 26], state: "liquid", dens: 1.15, fuel: 3, spread: 1, freezable: true },
+  "Steam": { cat: "gas", col: [200, 212, 224], state: "gas", dens: 0.1, drift: 0.5, rise: 2, freezable: true },
+  "Cloud": { cat: "gas", col: [232, 238, 245], state: "gas", dens: 0.05, drift: 0.6 },
+  "Rain": { cat: "gas", col: [91, 155, 213], state: "liquid", spread: 3, conduct: true, freezable: true },
+  "Frost": { cat: "gas", col: [207, 233, 255], state: "powder", dens: 0.2, chill: 2, mob: 0.8 },
+  "Lightning": { cat: "gas", col: [255, 224, 102], state: "energy", dens: 0.0, heat: 2, ignite: 2, drift: 0.2 },
+  "Plasma": { cat: "gas", col: [255, 79, 216], state: "energy", dens: 0.0, heat: 3, ignite: 3, drift: 0.1, rise: 2 },
+  "Toxic Gas": { cat: "gas", col: [154, 205, 50], state: "gas", dens: 0.4, drift: 0.55, acidic: true },
+  "Fire": { cat: "fire", col: [255, 138, 0], state: "energy", dens: 0.0, heat: 1, ignite: 2, drift: 0.5 },
+  "Spark": { cat: "fire", col: [255, 225, 77], state: "energy", dens: 0.0, heat: 1, ignite: 2, drift: 0.2 },
+  "Molten Metal": { cat: "fire", col: [255, 154, 60], state: "liquid", dens: 7.0, heat: 2, ignite: 2, cool: 900, spread: 1, conduct: true, coolto: "Metal" },
+  "Phosphor": { cat: "fire", col: [182, 255, 92], state: "powder", dens: 1.8, heat: 1, ignite: 1, fuel: 2, mob: 0.9 },
+  "Foam": { cat: "reactive", col: [245, 245, 220], state: "powder", dens: 0.1, mob: 0.2, absorb: true },
+  "Bomb": { cat: "reactive", col: [185, 28, 28], state: "powder", dens: 2.0, mob: 0.9, explode: true, shatter: true },
+  "Hydrogen": { cat: "reactive", col: [219, 234, 254], state: "gas", dens: 0.05, fuel: 4, drift: 0.4, rise: 3, explode: true },
+  "Thermite": { cat: "reactive", col: [194, 65, 12], state: "powder", dens: 3.5, fuel: 3 },
+  "Crystal": { cat: "reactive", col: [126, 231, 255], state: "powder", dens: 2.6, melt: 2, acidvuln: 1, mob: 0.8, shatter: true },
   "Obsidian": { cat: "reactive", col: [30, 27, 46], state: "solid", dens: 2.4, melt: 3, shatter: true },
-  "Quicklime": { cat: "reactive", col: [232, 224, 208], state: "powder", acidvuln: 2 },
-  "Dry Ice": { cat: "reactive", col: [223, 246, 255], state: "solid", dens: 1.5, chill: 3 },
-  "Wax": { cat: "reactive", col: [246, 232, 178], state: "solid", dens: 0.9, melt: 1, fuel: 2 },
-  "Gold": { cat: "metal", col: [255, 210, 74], state: "solid", dens: 19.3, melt: 2 },
-  "Iron Ore": { cat: "metal", col: [138, 90, 60], state: "solid", dens: 5.0, melt: 2, acidvuln: 2, shatter: true },
-  "Rust": { cat: "metal", col: [160, 82, 45], state: "powder", dens: 4.0, melt: 2, acidvuln: 2 },
-  "Sulphur": { cat: "metal", col: [232, 212, 77], state: "powder", dens: 2.0, fuel: 2, acidvuln: 1 },
+  "Quicklime": { cat: "reactive", col: [232, 224, 208], state: "powder", acidvuln: 2, mob: 0.6 },
+  "Dry Ice": { cat: "reactive", col: [223, 246, 255], state: "powder", dens: 1.5, chill: 3, mob: 0.7 },
+  "Wax": { cat: "reactive", col: [246, 232, 178], state: "powder", dens: 0.9, melt: 1, fuel: 2, mob: 0.35 },
+  "Gold": { cat: "metal", col: [255, 210, 74], state: "powder", dens: 19.3, melt: 2, mob: 0.9 },
+  "Iron Ore": { cat: "metal", col: [138, 90, 60], state: "powder", dens: 5.0, melt: 2, acidvuln: 2, mob: 0.9, shatter: true },
+  "Rust": { cat: "metal", col: [160, 82, 45], state: "powder", dens: 4.0, melt: 2, acidvuln: 2, mob: 0.9 },
+  "Sulphur": { cat: "metal", col: [232, 212, 77], state: "powder", dens: 2.0, fuel: 2, acidvuln: 1, mob: 0.9 },
 };
 
 // Defaults from the board's m() helper.
 const DEFAULTS = {
-  dens: 1.0, heat: 0, melt: 99, ignite: 0, chill: 0, fuel: 0, acidvuln: 0,
+  dens: 1.0, heat: 0, melt: 99, ignite: 0, chill: 0, fuel: 0, acidvuln: 0, cool: 0,
+  coolto: null, mob: 1.0, spread: 0, drift: 0.3, rise: 1,
   explode: false,
   conduct: false,
   inert: false,
@@ -136,7 +149,7 @@ const EXPLICIT: readonly ExplicitEntry[] = [
   ["Gunpowder", "Water", "X", "ruined"],
   ["Bomb", "Water", "X", "duds"],
   ["Dry Ice", "Water", "R", "rolling fog"],
-  ["Ice", "Water", "F", "freezes it"],
+  ["Ice", "Water", "^", "floats"],
   ["Snow", "Water", "F", "freezes"],
   ["Frost", "Water", "F", "freezes it"],
   ["Water", "Steam", "R", "condenses"],

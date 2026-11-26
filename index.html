@@ -65,6 +65,24 @@
         white-space: nowrap;
       }
 
+      #random {
+        flex: none;
+        min-block-size: 2rem;
+        padding: 0.2rem 0.9rem;
+        font: inherit;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--bg);
+        background: #e0a85a;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+
+      #random:active {
+        filter: brightness(0.85);
+      }
+
       #current {
         display: flex;
         align-items: center;
@@ -117,6 +135,57 @@
 
       #hint.gone {
         opacity: 0;
+      }
+
+      /* Title card. Sits over the stage but never blocks a tap: the sandbox
+         underneath is already live, and the first touch anywhere dismisses it.
+         It also fades out on its own after a few seconds. */
+      #title {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 0.35rem;
+        text-align: center;
+        padding: 1rem;
+        background: rgb(11 13 16 / 82%);
+        pointer-events: none;
+        opacity: 1;
+        transition: opacity 700ms ease;
+      }
+
+      #title.gone {
+        opacity: 0;
+      }
+
+      #title h1 {
+        margin: 0;
+        font-size: clamp(1.5rem, 7vw, 2.4rem);
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      #title p {
+        margin: 0;
+        color: var(--dim);
+        font-size: 0.85rem;
+        letter-spacing: 0.02em;
+      }
+
+      #title .go {
+        margin-top: 0.6rem;
+        color: #e0a85a;
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #title,
+        #hint {
+          transition: none;
+        }
       }
 
       #ring {
@@ -277,12 +346,18 @@
     <div id="app">
       <header id="topbar">
         <span id="brand">Particle Sandbox</span>
+        <button id="random" type="button" aria-label="Generate a random world">Random</button>
         <span id="current"><i class="dot"></i><span id="currentName">Sand</span></span>
       </header>
 
       <div id="stage">
         <canvas id="sim"></canvas>
         <p id="hint">Tap or drag to pour</p>
+        <div id="title" role="presentation">
+          <h1>Particle Sandbox</h1>
+          <p>48 materials that fall, flow, burn and melt</p>
+          <p class="go">Tap anywhere to start</p>
+        </div>
         <div id="ring"></div>
       </div>
 

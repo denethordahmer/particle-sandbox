@@ -79,7 +79,8 @@ def js(s):
 # --- emit TypeScript
 BOOLS = ["explode", "conduct", "inert", "soluble", "absorb", "acidic", "freezable", "shatter"]
 NUM_DEFAULTS = {"dens": 1.0, "heat": 0, "melt": 99, "ignite": 0, "chill": 0,
-                "fuel": 0, "acidvuln": 0}
+                "fuel": 0, "acidvuln": 0, "cool": 0,
+                "mob": 1.0, "spread": 0, "drift": 0.3, "rise": 1}
 
 lines = []
 lines.append("// Generated from tools/reaction-board.py — the physics specification.")
@@ -108,6 +109,18 @@ lines.append("  readonly ignite: number;")
 lines.append("  readonly chill: number;")
 lines.append("  readonly fuel: number;")
 lines.append("  readonly acidvuln: number;")
+lines.append("  /** Ticks of heat left before it sets; 0 means it never sets. */")
+lines.append("  readonly cool: number;")
+lines.append("  /** What it becomes when its heat runs out. */")
+lines.append("  readonly coolto: MaterialName | null;")
+lines.append("  /** Powders: 0..1 chance of rolling off a slope each tick. */")
+lines.append("  readonly mob: number;")
+lines.append("  /** Liquids: cells of sideways creep per tick when it cannot fall. */")
+lines.append("  readonly spread: number;")
+lines.append("  /** Gases: 0..1 chance of drifting sideways instead of climbing. */")
+lines.append("  readonly drift: number;")
+lines.append("  /** Gases: cells climbed per tick (buoyancy). */")
+lines.append("  readonly rise: number;")
 for b in BOOLS:
     lines.append(f"  readonly {b}: boolean;")
 lines.append("}")
@@ -127,12 +140,15 @@ for nm in ORDER:
     for b in BOOLS:
         if p[b]:
             parts.append(f"{b}: true")
+    if p["coolto"]:
+        parts.append(f"coolto: {js(p['coolto'])}")
     lines.append(f"  {js(nm)}: {{ " + ", ".join(parts) + " },")
 lines.append("};")
 lines.append("")
 lines.append("// Defaults from the board's m() helper.")
 lines.append("const DEFAULTS = {")
-lines.append("  dens: 1.0, heat: 0, melt: 99, ignite: 0, chill: 0, fuel: 0, acidvuln: 0,")
+lines.append("  dens: 1.0, heat: 0, melt: 99, ignite: 0, chill: 0, fuel: 0, acidvuln: 0, cool: 0,")
+lines.append("  coolto: null, mob: 1.0, spread: 0, drift: 0.3, rise: 1,")
 for b in BOOLS:
     lines.append(f"  {b}: false,")
 lines.append("};")
