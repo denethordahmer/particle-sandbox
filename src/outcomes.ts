@@ -72,8 +72,6 @@ const RULES: readonly Rule[] = [
   rule("Water", "Quicklime", "Steam", "Stone", 0.5),
   rule("Rain", "Quicklime", "Steam", "Stone", 0.5),
   rule("Quicklime", "Steam", null, "Stone", 0.5),
-  rule("Water", "Soil", null, "Clay", 0.3),
-  rule("Rain", "Soil", null, "Clay", 0.3),
   rule("Water", "Clay", null, "Clay", 0.004),
   rule("Water", "Sponge", null, "Sponge", 0.08),
   rule("Water", "Metal", "Water", "Rust", 0.02),

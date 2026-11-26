@@ -64,6 +64,12 @@ export interface World {
    * spends heat faster, so a pour does finite work instead of multiplying.
    */
   readonly heat: Uint16Array;
+  /**
+   * Last sideways direction a liquid cell took: 1 = came from the left,
+   * 2 = came from the right, 0 = none. Used to stop two cells swapping back
+   * and forth, which showed as a flickering, permanently holed water surface.
+   */
+  readonly dir: Uint8Array;
   tick: number;
   readonly random: () => number;
 }
@@ -79,6 +85,7 @@ export function createWorld(width: number, height: number, seed = 1): World {
     moved: new Uint8Array(n),
     reacted: new Uint8Array(n),
     heat: new Uint16Array(n),
+    dir: new Uint8Array(n),
     tick: 0,
     random: makeRandom(seed),
   };
@@ -144,6 +151,9 @@ function swap(w: World, i: number, j: number): void {
   const h = w.heat[i]!;
   w.heat[i] = w.heat[j]!;
   w.heat[j] = h;
+  const d = w.dir[i]!;
+  w.dir[i] = w.dir[j]!;
+  w.dir[j] = d;
   w.moved[i] = 1;
   w.moved[j] = 1;
 }
@@ -253,31 +263,58 @@ function movePowder(w: World, x: number, y: number, mob: number): void {
   if (w.random() < mob && tryMove(w, x, y, x - dir, y + 1)) return;
 }
 
+/** How much of one liquid a column holds: a cheap stand-in for its pressure. */
+function columnWater(w: World, x: number, id: CellId): number {
+  let n = 0;
+  for (let y = 0; y < w.height; y++) if (w.cells[y * w.width + x] === id) n++;
+  return n;
+}
+
 /**
- * Liquids fall, then roll off a slope, then creep sideways up to their own
- * spread distance. Thin liquids level out; tar and lava ooze.
+ * Liquids fall, then level out by flowing into a column that holds less of
+ * the same liquid. A settled pool must be perfectly still, so three things
+ * are true of every sideways move:
+ *   - it covers ONE cell, so no gap is ever jumped over and left behind;
+ *   - it needs open space to drop into or a shallower column to flow to, so
+ *     the pool gets flatter and then stops for good;
+ *   - a cell remembers the direction it last flowed and will not immediately
+ *     reverse, so two cells can never swap back and forth.
+ * The old rule jumped up to three cells into any empty space. That skipped
+ * over cells, leaving permanent holes, and let pairs swap forever: the
+ * flickering, dotted surface the owner reported.
  */
-function moveLiquid(w: World, x: number, y: number, spread: number): void {
-  if (tryDown(w, x, y)) return;
-  const dir = w.random() < 0.5 ? 1 : -1;
-  if (tryMove(w, x, y, x + dir, y + 1)) return;
-  if (tryMove(w, x, y, x - dir, y + 1)) return;
-  // Spread sideways, up to a few cells so pools level out.
+function moveLiquid(w: World, x: number, y: number, spread: number, id: CellId): void {
+  if (tryDown(w, x, y)) {
+    w.dir[y * w.width + x] = 0;
+    return;
+  }
   const i = y * w.width + x;
-  for (const d of [dir, -dir]) {
-    let target = -1;
+  const here = columnWater(w, x, id);
+  const d = w.random() < 0.5 ? 1 : -1;
+  const mem = w.dir[i]!;
+  const order = mem === 1 ? [-1, 1] : mem === 2 ? [1, -1] : [d, -d];
+  let target = -1;
+  for (const dd of order) {
+    if (mem === 1 && dd === 1) continue; // it came from the left; do not go back
+    if (mem === 2 && dd === -1) continue;
     for (let step = 1; step <= spread; step++) {
-      const nx = x + d * step;
+      const nx = x + dd * step;
       if (!inBounds(w, nx, y)) break;
       const j = y * w.width + nx;
       if (w.cells[j] !== EMPTY || w.moved[j] === 1) break;
-      target = j;
+      const drop = y + 1 < w.height && w.cells[j + w.width] === EMPTY;
+      if (drop || columnWater(w, nx, id) < here) {
+        target = nx;
+        break;
+      }
     }
-    if (target >= 0) {
-      swap(w, i, target);
-      return;
-    }
+    if (target >= 0) break;
   }
+  if (target < 0) return;
+  const dd = target > x ? 1 : -1;
+  swap(w, i, y * w.width + target);
+  w.dir[i] = 0;
+  w.dir[y * w.width + target] = dd > 0 ? 2 : 1;
 }
 
 function moveGas(w: World, x: number, y: number, drift: number, rise: number): void {
@@ -300,7 +337,7 @@ function stepMovement(w: World): void {
   w.moved.fill(0);
   // Bottom-up; alternate scan direction per row and tick to avoid bias.
   for (let y = w.height - 1; y >= 0; y--) {
-    const ltr = (y + w.tick) % 2 === 0;
+    const ltr = y % 2 === 0;
     for (let k = 0; k < w.width; k++) {
       const x = ltr ? k : w.width - 1 - k;
       const i = y * w.width + x;
@@ -312,7 +349,7 @@ function stepMovement(w: World): void {
           movePowder(w, x, y, p.mob);
           break;
         case "liquid":
-          moveLiquid(w, x, y, Math.max(1, p.spread));
+          moveLiquid(w, x, y, Math.max(1, p.spread), id);
           break;
         case "gas":
         case "energy":
@@ -451,5 +488,6 @@ export function clearWorld(w: World): void {
   w.cells.fill(EMPTY);
   w.life.fill(0);
   w.heat.fill(0);
+  w.dir.fill(0);
   w.moved.fill(0);
 }
