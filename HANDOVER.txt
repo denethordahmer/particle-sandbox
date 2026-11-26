@@ -1,0 +1,332 @@
+PARTICLE SANDBOX — PROJECT HANDOVER
+========================================
+Written 26 November 2026. Read this whole file before touching any code.
+It states exactly what has been decided, what exists on disk, and what to
+build next. Nothing here is a guess; everything was verified by running it.
+
+
+1. WHAT THIS PROJECT IS
+----------------------------------------
+A falling-sand style physics sandbox for the owner's Android phone, played in
+a mobile browser. You paint materials onto a grid; they fall, flow, burn,
+freeze, dissolve, explode and combine. The aim is a toy you can mess about in,
+where every material reacts with everything it physically should.
+
+It is built with TypeScript and Vite. It deploys to GitHub Pages through a
+GitHub Action. The original loose concept is in
+/storage/emulated/0/particle-sandbox.txt — treat its steps as suggestions,
+not requirements. The real specification is this file plus the reaction board.
+
+
+2. DECISIONS ALREADY LOCKED IN
+----------------------------------------
+Do not re-ask these; the owner has settled them.
+
+- Language: TypeScript, strict mode. Chosen because it catches typos in
+  material names at build time.
+- Build tool: Vite.
+- Package manager LOCALLY: bun. Never npm. The owner's Termux/proot setup has
+  had repeated npm cache failures (ENOENT rename errors). pnpm via corepack
+  also failed to install. bun works and is already installed.
+- Package manager IN CI: npm. That runs on GitHub's Linux servers, where npm
+  is fine. This split is deliberate.
+- Rendering: "hybrid split". Grains and solids render as crisp cells;
+  liquids, gases and light get soft glow and trails.
+- Roster size: 48 materials, every one reacting as widely as physically
+  sensible.
+- Play style: open-ended toy. No score, no levels. Paint, erase, pause.
+- Controls: comfortable two-thumb. Element picker near the thumbs, brush size
+  on a slider, large touch targets (44px minimum).
+- Aesthetic: earthy elemental. Deep neutral backdrop so each material's own
+  colour carries the scene. Not neon cyberpunk, not candy, not a specific
+  "theme" costume. Nature plus a furnace.
+- Low-reactivity materials are allowed and wanted, as long as they are
+  deliberate: bedrock (build wall), obsidian (acid-proof), gold (inert),
+  glass (transparent, stable), rust (end product), stone (base solid).
+
+
+3. WHERE THE FILES LIVE
+----------------------------------------
+Two copies exist. This matters — read carefully.
+
+  /storage/emulated/0/particle-sandbox/
+      The owner's upload copy. This is what gets zipped and pushed to GitHub.
+      Source files only. Do NOT try to build here.
+
+  /root/particle-sandbox/
+      The working copy. node_modules lives here. ALL local builds, dev
+      servers and type checks run here.
+
+WHY: /mnt/sdcard (internal storage) is mounted noexec-ish and cannot run
+native binaries. Vite's Rollup native module fails there with
+"failed to map segment from shared object" (ERR_DLOPEN_FAILED), and esbuild
+fails with EACCES. Copying the project to /root fixes both.
+
+RULE: edit source in BOTH copies, or edit in /root then copy the changed
+files to /storage. Keep them in step. Never let them drift.
+
+Current tree in the upload copy:
+
+  .github/workflows/deploy.yml   GitHub Pages build + deploy
+  .github/workflows/unzip.yml    unpacks an uploaded .zip into the repo
+  .gitignore                     ignores node_modules/, dist/, logs
+  HANDOVER.txt                   this file
+  index.html                     page shell, canvas, toolbar container
+  package.json                   vite + typescript, scripts
+  tsconfig.json                  strict, noEmit, bundler resolution
+  src/main.ts                    PLACEHOLDER — logs a string, nothing else
+  tools/reaction-board.py        generates the reaction board images
+  bun.lock                       lockfile
+
+
+4. TOOLCHAIN, EXACTLY AS INSTALLED
+----------------------------------------
+  bun      1.4.5      at $HOME/.bun/bin/bun  (export PATH="$HOME/.bun/bin:$PATH")
+  node     v22.22.1
+  tsc      5.9.3      (via node_modules)
+  vite     7.3.8      (via node_modules)
+  python3  with Pillow 12.1.1 (used only for the board images)
+
+Commands that are VERIFIED WORKING, run from /root/particle-sandbox:
+
+  export PATH="$HOME/.bun/bin:$PATH"
+  bun install
+  bun x tsc                      # type check — must print nothing
+  bun x vite build               # production build into dist/
+  bun x vite --port 5173 --host 127.0.0.1    # dev server
+
+Note: bun could not create symlinks in node_modules/.bin on the sdcard copy,
+which is another reason the /root copy is the build copy. In /root the bin
+links exist and `bun x` works.
+
+After a build, dist/ is produced. .gitignore already excludes it. Never
+commit dist/ or node_modules/.
+
+
+5. THE ROSTER — 48 MATERIALS
+----------------------------------------
+Definitive list. Names are exact strings; they must match between the
+simulation code and the reaction data.
+
+STRUCTURE (10)
+  Stone, Bedrock, Ice, Glass, Metal, Wood, Sponge, Clay, Limestone, Rubber
+
+GRANULAR (7)
+  Sand, Salt, Gravel, Soil, Gunpowder, Snow, Coal
+
+LIQUID (7)
+  Water, Oil, Lava, Acid, Alkali, Mercury, Tar
+
+GAS AND SKY (7)
+  Steam, Cloud, Rain, Frost, Lightning, Plasma, Toxic Gas
+
+FIRE AND ENERGY (4)
+  Fire, Spark, Molten Metal, Phosphor
+
+REACTIVE AND FORMED (9)
+  Foam, Bomb, Hydrogen, Thermite, Crystal, Obsidian, Quicklime, Dry Ice, Wax
+
+METALS AND ORE (4)
+  Gold, Iron Ore, Rust, Sulphur
+
+Materials that were considered and deliberately CUT: Slag, Lead, Glow Dust,
+Brine, Milk, Gel, Ash, Ember, Wind, Smoke, Leaves, and the entire plant family
+(seeds, roots, moss, mycelium, spores, vine, compost). Do not reintroduce them
+without asking.
+
+
+6. THE REACTION MODEL
+----------------------------------------
+The single source of truth is tools/reaction-board.py. It defines, for every
+material, a set of physical properties, then computes a reaction symbol for
+all 1,128 pairs. Run it to regenerate the board images.
+
+Properties per material (in the `m(...)` helper):
+  state      solid | powder | liquid | gas | energy
+  dens       density, used for floating/sinking
+  heat       how much it melts others (0-3)
+  melt       heat needed to melt this
+  ignite     how readily it sets others alight
+  chill      how much it freezes others
+  fuel       how well it burns
+  explode    detonates when lit
+  conduct    conducts lightning/plasma
+  inert      ignores everything (bedrock only)
+  soluble    dissolves in water
+  absorb     soaks up liquids
+  acidic     corrodes acid-vulnerable things
+  acidvuln   how vulnerable it is to acid
+  freezable  can be frozen
+  shatter    breaks under blast or lightning
+
+Reaction symbols (7 + none):
+  B  ignites / burns
+  D  dissolves / corrodes
+  M  melts / softens
+  F  freezes / chills
+  R  reacts into something new
+  X  destroys / explodes / quenches / shatters
+  ^  floats / separates by density
+  .  no reaction
+
+The script holds an explicit list (variable E) of 892 live hand-written pairs
+with plain-English reasons, and a fallback rule engine for the rest. Fallback order:
+inert check, explosion-when-lit, ignition, heat melt, chill freeze, acid,
+dissolve, absorb, density separation, conduction.
+
+Current coverage: 621 reacting pairs out of 1,128. The remaining 507 are true
+"nothing happens" pairs.
+
+Most reactive: Lava 45, Plasma 44, Molten Metal 44, Bomb 42, Lightning 42.
+Least reactive (all intentional): Bedrock 0, Obsidian 7, Gold 9, Stone 13,
+Glass 13, Rust 13.
+
+IMPORTANT: the board is a design document. When the simulation is written,
+the reaction data must be ported into TypeScript and must agree with the
+board. If a pair behaves differently in the game than on the board, the board
+is the intended behaviour unless the owner says otherwise.
+
+
+7. IMAGES ALREADY DELIVERED TO THE OWNER
+----------------------------------------
+All in /storage/emulated/0/Documents/:
+
+  particle-sandbox-elements.png       every material: swatch, description, reactions
+  particle-sandbox-matrix.png         earlier 16x16 summary (superseded)
+  particle-sandbox-board-full.png     all 48 x 48 in one image
+  particle-sandbox-board-1..4.png     same board split into 12-column strips
+  particle-sandbox-new-items.png      Limestone/Wax/Rubber against all others
+
+The board images are regenerated by tools/reaction-board.py.
+
+
+8. WHAT EXISTS IN CODE RIGHT NOW
+----------------------------------------
+Almost nothing. This is honest:
+
+  src/main.ts        3 lines. Logs "particle-sandbox ready". No simulation.
+  index.html         Full-screen dark canvas, empty toolbar div, basic CSS.
+                     Touch-action none, safe-area padding, 44px buttons.
+  package.json       scripts: dev, build (tsc && vite build), preview.
+  tsconfig.json      strict, noUncheckedIndexedAccess, noUnusedLocals, noEmit.
+  deploy.yml         GitHub Pages: checkout, node 22, npm install, npm run
+                     build, upload dist, deploy. Uses npm on purpose.
+  unzip.yml          Unpacks any .zip dropped at the repo root, commits the
+                     files, deletes the zip. Runs before deploy completes.
+
+The build is GREEN. tsc passes, vite build produces dist/. The page loads and
+serves the placeholder module. Nothing is playable yet.
+
+
+8b. HOW UPLOADING WORKS
+----------------------------------------
+The owner uploads a zip, not loose files. Two workflows cooperate:
+
+  unzip.yml   watches for any *.zip at the repo root. Unpacks it, copies the
+              files over the working tree, commits them as
+              "Unzip archive", and deletes the zip in the same commit.
+              It skips .git, .github, node_modules, dist and nested zips.
+              It refuses to run if the archive has no package.json or no
+              src/ folder, so a bad upload cannot wipe the project.
+
+  deploy.yml  then builds with npm and publishes dist/ to GitHub Pages.
+              It triggers on the Unzip workflow finishing (workflow_run),
+              not on a push, because the unpack's own commit is pushed with
+              GITHUB_TOKEN and GitHub does not start workflows for those.
+
+So the upload procedure is: put the zip at the top level of the repo, commit
+and push. The rest is automatic. A build takes a minute or two.
+
+Guard rails inside unzip.yml:
+  - only .zip files at the root are considered
+  - the shallowest package.json decides the project root
+  - src/ and index.html must exist next to it, or nothing is copied
+  - the bot's own commit does not retrigger the workflow
+  - two unpacks on the same branch queue instead of racing
+
+
+9. WHAT TO BUILD NEXT — IN THIS ORDER
+----------------------------------------
+Step A. Port the reaction data to TypeScript.
+  - Create src/materials.ts exporting the 48 names as a union type and a
+    record of properties. A typo must be a compile error.
+  - Port the explicit pair list and the fallback rules from
+    tools/reaction-board.py. Keep the same symbols and the same outcomes.
+  - Verify: a script or test that reproduces the board's 621 reacting pairs
+    and prints a diff of zero.
+
+Step B. The simulation core.
+  - A typed grid, width x height in cells, held in a Uint8Array or similar.
+  - A fixed timestep tick. Bottom-up iteration for falling materials so
+    particles do not fall more than one cell per tick.
+  - Movement rules per state: powder falls and piles; liquid falls and
+    spreads sideways; gas rises; energy rises and dies out.
+  - Reaction pass using the ported data.
+  - Keep it deterministic and testable. Pure functions where possible.
+
+Step C. Rendering.
+  - Canvas 2D first. One canvas, sized to the device pixel ratio.
+  - Hybrid look: crisp 1-cell rects for solids and powders; for liquids,
+    gases and energy, draw at slightly larger radius with low-alpha glow.
+  - Only redraw changed cells if frame rate needs it; start simple and
+    measure on the actual phone.
+
+Step D. Touch controls.
+  - Element picker along the bottom, thumb-reachable, scrollable.
+  - Brush size slider. Eraser. Pause. Clear.
+  - Large targets, no hover reliance, no text input.
+
+Step E. Polish and ship.
+  - Sound off by default. Pause when the tab is hidden.
+  - Cap particle count with a visible indicator if it gets heavy.
+  - Build, zip, upload, confirm GitHub Pages serves it.
+
+Order matters. Do not start rendering before the simulation is correct, and
+do not start the simulation before the material data compiles.
+
+
+10. RULES FOR WHOEVER PICKS THIS UP
+----------------------------------------
+- The owner is not a developer. Explain in plain words. No jargon without a
+  definition the first time it appears.
+- Every reply should be short. Dot points where suitable. No tables in chat.
+- Verify before claiming. Run tsc and vite build, and say what you ran.
+- If you use subagents, give each ONE small piece of work, never a big task.
+  Several small ones in parallel beats one long one. The owner dislikes
+  waiting five or ten minutes for a single agent.
+- Never use npm locally. bun only.
+- Build in /root/particle-sandbox, upload from /storage/emulated/0/particle-sandbox.
+- Keep both copies in step.
+- Back up any config file before replacing it.
+- Conventional commit messages if a repo is ever initialised: feat, fix,
+  refactor, docs, test, chore, build.
+
+
+11. KNOWN GOTCHAS
+----------------------------------------
+- Building on /mnt/sdcard fails (Rollup native module, esbuild EACCES). Use /root.
+- The deploy workflow no longer sets `cache: npm` because there is no
+  package-lock.json (the local lockfile is bun.lock). npm install runs fresh
+  in CI. Do not re-add the cache line without committing a package-lock.json.
+- .gitignore exists and covers node_modules/, dist/, *.log, .DS_Store.
+- There is no git repository yet in either copy.
+- The owner's phone is narrow with a touch keyboard. Assume small viewport.
+- unzip.yml deliberately refuses archives without package.json or src/.
+  If an upload is rejected, read the workflow log: it prints the archive's
+  full file listing so the cause is visible.
+- deploy.yml is chained to unzip.yml with `workflow_run`. Without that chain
+  the site would never update after an upload: bot pushes do not trigger
+  other workflows. If you ever rename the Unzip workflow, update the
+  `workflows: ["Unzip"]` line in deploy.yml to match exactly.
+
+
+12. QUICK START FOR THE NEXT SESSION
+----------------------------------------
+  export PATH="$HOME/.bun/bin:$PATH"
+  cd /root/particle-sandbox
+  bun install
+  bun x tsc && bun x vite build        # confirm green before changing anything
+  bun x vite --port 5173 --host 127.0.0.1
+
+Then open section 9 and start at Step A. Read tools/reaction-board.py first —
+it is the specification for the game's physics.
