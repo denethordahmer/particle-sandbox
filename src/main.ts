@@ -1,7 +1,7 @@
 // Entry point: wires the world, renderer, fixed-timestep loop and touch
 // controls together. Game logic lives in sim.ts / outcomes.ts, drawing in
 // render.ts, so this file only coordinates.
-import { MATERIAL_NAMES, MATERIALS, type MaterialName } from "./materials";
+import { MATERIAL_NAMES, MATERIALS, type Category, type MaterialName } from "./materials";
 import {
   clearWorld,
   createWorld,
@@ -20,16 +20,38 @@ const TICK_MS = 1000 / 60;
 /** Never simulate more than this much catch-up in one frame. */
 const MAX_CATCHUP_MS = 200;
 
+interface Group {
+  readonly cat: Category;
+  readonly label: string;
+}
+
+/** Picker tabs, in the order the roster was designed. */
+const GROUPS: readonly Group[] = [
+  { cat: "structure", label: "Solid" },
+  { cat: "granular", label: "Grain" },
+  { cat: "liquid", label: "Liquid" },
+  { cat: "gas", label: "Gas" },
+  { cat: "fire", label: "Fire" },
+  { cat: "reactive", label: "Reactive" },
+  { cat: "metal", label: "Metal" },
+];
+
 const stage = document.querySelector<HTMLDivElement>("#stage")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#sim")!;
+const tabsEl = document.querySelector<HTMLDivElement>("#tabs")!;
 const materialsEl = document.querySelector<HTMLDivElement>("#materials")!;
 const brushEl = document.querySelector<HTMLInputElement>("#brush")!;
+const brushValEl = document.querySelector<HTMLSpanElement>("#brushVal")!;
 const eraseEl = document.querySelector<HTMLButtonElement>("#erase")!;
 const pauseEl = document.querySelector<HTMLButtonElement>("#pause")!;
 const clearEl = document.querySelector<HTMLButtonElement>("#clear")!;
 const hintEl = document.querySelector<HTMLParagraphElement>("#hint")!;
+const ringEl = document.querySelector<HTMLDivElement>("#ring")!;
+const currentDotEl = document.querySelector<HTMLElement>("#current .dot")!;
+const currentNameEl = document.querySelector<HTMLSpanElement>("#currentName")!;
 
 let selected: MaterialName = "Sand";
+let activeCat: Category = MATERIALS[selected].cat;
 let erasing = false;
 let paused = false;
 let brush = Number(brushEl.value);
@@ -71,6 +93,20 @@ function resizeWorld(next: { width: number; height: number }): void {
   world = nextWorld;
 }
 
+/** Scale from world cells to CSS pixels, and the centring offsets. */
+function viewFit(cssWidth: number, cssHeight: number): {
+  fit: number;
+  offsetX: number;
+  offsetY: number;
+} {
+  const fit = Math.min(cssWidth / world.width, cssHeight / world.height);
+  return {
+    fit,
+    offsetX: (cssWidth - world.width * fit) / 2,
+    offsetY: (cssHeight - world.height * fit) / 2,
+  };
+}
+
 function layout(): void {
   const rect = stage.getBoundingClientRect();
   const cssW = Math.max(1, Math.floor(rect.width));
@@ -91,9 +127,35 @@ function layout(): void {
 
 // ---------------------------------------------------------------- material picker
 
+function buildTabs(): void {
+  const frag = document.createDocumentFragment();
+  for (const group of GROUPS) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "tab";
+    tab.dataset.cat = group.cat;
+    tab.textContent = group.label;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", group.cat === activeCat ? "true" : "false");
+    tab.addEventListener("click", () => {
+      activeCat = group.cat;
+      buildPicker();
+    });
+    frag.append(tab);
+  }
+  tabsEl.append(frag);
+}
+
+/** Rebuild the material strip for the active category. */
 function buildPicker(): void {
+  for (const tab of tabsEl.querySelectorAll<HTMLButtonElement>(".tab")) {
+    tab.setAttribute("aria-selected", tab.dataset.cat === activeCat ? "true" : "false");
+  }
+
+  materialsEl.replaceChildren();
   const frag = document.createDocumentFragment();
   for (const name of MATERIAL_NAMES) {
+    if (MATERIALS[name].cat !== activeCat) continue;
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "chip";
@@ -109,25 +171,26 @@ function buildPicker(): void {
     label.textContent = name;
 
     chip.append(dot, label);
-    chip.addEventListener("click", () => {
-      selectMaterial(name);
-    });
+    chip.addEventListener("click", () => selectMaterial(name));
     frag.append(chip);
   }
   materialsEl.append(frag);
+  materialsEl.scrollLeft = 0;
 }
 
 function selectMaterial(name: MaterialName): void {
   selected = name;
   erasing = false;
   eraseEl.setAttribute("aria-pressed", "false");
+  currentNameEl.textContent = name;
+  currentDotEl.style.background = rgbCss(MATERIALS[name].col);
   for (const chip of materialsEl.querySelectorAll<HTMLButtonElement>(".chip")) {
     chip.setAttribute("aria-selected", chip.dataset.material === name ? "true" : "false");
   }
   const active = materialsEl.querySelector<HTMLButtonElement>(
     `.chip[data-material="${CSS.escape(name)}"]`,
   );
-  active?.scrollIntoView({ inline: "center", block: "nearest" });
+  active?.scrollIntoView({ inline: "nearest", block: "nearest" });
 }
 
 // ---------------------------------------------------------------- painting
@@ -137,16 +200,10 @@ let lastPoint: { x: number; y: number } | null = null;
 
 function toCell(clientX: number, clientY: number): { x: number; y: number } | null {
   const rect = canvas.getBoundingClientRect();
-  const size = worldSizeFor(rect.width, rect.height, 1);
-  // Match the renderer's fit-and-centre maths so a touch lands on the cell
-  // under the finger.
-  const fit = Math.min(rect.width / world.width, rect.height / world.height);
-  const offsetX = (rect.width - world.width * fit) / 2;
-  const offsetY = (rect.height - world.height * fit) / 2;
+  const { fit, offsetX, offsetY } = viewFit(rect.width, rect.height);
   const x = Math.floor((clientX - rect.left - offsetX) / fit);
   const y = Math.floor((clientY - rect.top - offsetY) / fit);
   if (x < 0 || y < 0 || x >= world.width || y >= world.height) return null;
-  void size;
   return { x, y };
 }
 
@@ -175,19 +232,42 @@ function paintStroke(clientX: number, clientY: number): void {
   lastPoint = cell;
 }
 
+/** Show a ring the size of the brush under the finger. */
+function moveRing(clientX: number, clientY: number): void {
+  const rect = canvas.getBoundingClientRect();
+  const { fit } = viewFit(rect.width, rect.height);
+  const diameter = Math.max(18, (brush * 2 + 1) * fit);
+  ringEl.style.inlineSize = `${diameter}px`;
+  ringEl.style.blockSize = `${diameter}px`;
+  ringEl.style.left = `${clientX - rect.left}px`;
+  ringEl.style.top = `${clientY - rect.top}px`;
+  ringEl.classList.add("on");
+}
+
+function hideRing(): void {
+  ringEl.classList.remove("on");
+}
+
 canvas.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   painting = true;
   lastPoint = null;
   canvas.setPointerCapture(e.pointerId);
+  moveRing(e.clientX, e.clientY);
   paintStroke(e.clientX, e.clientY);
 });
 
 canvas.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "mouse" && !painting) {
+    moveRing(e.clientX, e.clientY);
+  }
   if (!painting) return;
   e.preventDefault();
+  moveRing(e.clientX, e.clientY);
   paintStroke(e.clientX, e.clientY);
 });
+
+canvas.addEventListener("pointerleave", hideRing);
 
 function endStroke(e: PointerEvent): void {
   if (!painting) return;
@@ -196,14 +276,21 @@ function endStroke(e: PointerEvent): void {
   if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
 }
 
-canvas.addEventListener("pointerup", endStroke);
-canvas.addEventListener("pointercancel", endStroke);
+canvas.addEventListener("pointerup", (e) => {
+  endStroke(e);
+  if (e.pointerType !== "mouse") hideRing();
+});
+canvas.addEventListener("pointercancel", (e) => {
+  endStroke(e);
+  hideRing();
+});
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // ---------------------------------------------------------------- controls
 
 brushEl.addEventListener("input", () => {
   brush = Number(brushEl.value);
+  brushValEl.textContent = String(brush);
 });
 
 eraseEl.addEventListener("click", () => {
@@ -269,22 +356,64 @@ window.addEventListener("resize", () => {
   }, 120);
 });
 
+/** A little starting scene so the stage is not empty on load. */
 function seedStartingScene(): void {
   const w = world.width;
   const h = world.height;
-  // A thin bedrock shelf and a drift of sand: something to look at on load.
-  for (let x = 0; x < w; x++) {
-    if (x % 37 < 22) paint(world, x, h - 1, 0, "Bedrock");
+  const floor = h - 1;
+
+  // Bedrock floor, solid end to end so poured material stays in view.
+  for (let x = 0; x < w; x++) paint(world, x, floor, 0, "Bedrock");
+
+  // Left: a stone bluff with a soil skirt, roughly a quarter of the screen.
+  const bluffW = Math.floor(w * 0.3);
+  const bluffTop = Math.round(h * 0.68);
+  for (let x = 0; x < bluffW; x++) {
+    const t = x / bluffW;
+    const top = Math.round(bluffTop + Math.sin(t * Math.PI) * h * 0.14);
+    for (let y = top; y < floor; y++) {
+      // Stone core with a soil crust on the surface.
+      paint(world, x, y, 0, y < top + 2 ? "Soil" : "Stone");
+    }
   }
-  for (let i = 0; i < 6; i++) {
-    paint(world, Math.floor(w * (0.2 + i * 0.12)), Math.floor(h * 0.16), 2, "Sand");
+
+  // Right: a sand dune, lower and wider.
+  const duneStart = Math.floor(w * 0.66);
+  const duneTop = Math.round(h * 0.82);
+  for (let x = duneStart; x < w; x++) {
+    const t = (x - duneStart) / (w - duneStart);
+    const top = Math.round(duneTop + (1 - Math.cos(t * Math.PI * 0.9)) * h * 0.11);
+    for (let y = top; y < floor; y++) paint(world, x, y, 0, "Sand");
+  }
+
+  // Middle: a stone basin holding water clear of the soil, so the soil does
+  // not soak the pool up on the first tick.
+  const basinL = Math.floor(w * 0.38);
+  const basinR = Math.floor(w * 0.6);
+  const basinTop = floor - Math.round(h * 0.13);
+  for (let y = basinTop; y < floor; y++) {
+    paint(world, basinL, y, 0, "Stone");
+    paint(world, basinR, y, 0, "Stone");
+  }
+  for (let x = basinL + 1; x < basinR; x++) {
+    for (let y = basinTop + 2; y < floor; y++) paint(world, x, y, 0, "Water");
+  }
+
+  // A few logs standing in the soil crust, so fire has fuel to find.
+  for (const tx of [0.07, 0.15, 0.23]) {
+    const x = Math.floor(w * tx);
+    const t = x / bluffW;
+    const ground = Math.round(bluffTop + Math.sin(t * Math.PI) * h * 0.14);
+    for (let i = 0; i < 5; i++) paint(world, x, ground - 1 - i, 0, "Wood");
   }
 }
 
+buildTabs();
 buildPicker();
 layout();
 seedStartingScene();
 selectMaterial(selected);
+brushValEl.textContent = String(brush);
 requestAnimationFrame(frame);
 
 // Expose a small probe so the app can be checked from a console or an
@@ -298,6 +427,7 @@ declare global {
       step: (n: number) => void;
       paused: () => boolean;
       brush: (n: number) => void;
+      paintAt: (x: number, y: number) => void;
     };
   }
 }
@@ -314,5 +444,10 @@ window.__particle = {
   brush: (n) => {
     brush = n;
     brushEl.value = String(n);
+    brushValEl.textContent = String(n);
+  },
+  paintAt: (x, y) => {
+    paint(world, x, y, brush, erasing ? null : selected);
+    renderer.draw(world);
   },
 };

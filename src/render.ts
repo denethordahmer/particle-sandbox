@@ -155,17 +155,18 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   let cssW = 0;
   let cssH = 0;
+  let dprScale = 1;
 
   function resize(w: number, h: number, dpr: number): void {
     cssW = w;
     cssH = h;
+    dprScale = dpr;
     // Only the backing store is set here; the CSS box (100% of the stage) is
     // left to stylesheet layout so the canvas always fills its container.
     const pxW = Math.max(1, Math.round(w * dpr));
     const pxH = Math.max(1, Math.round(h * dpr));
     if (canvas.width !== pxW) canvas.width = pxW;
     if (canvas.height !== pxH) canvas.height = pxH;
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function paintBuffers(world: World): void {
@@ -214,6 +215,12 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   }
 
   function draw(world: World): void {
+    // Setting canvas.width/height resets every context property, transform
+    // included, so the device-pixel scale is applied here on each frame
+    // rather than once at resize time. Without it, drawing lands in a
+    // scaled-down rectangle in the top-left corner.
+    ctx!.setTransform(dprScale, 0, 0, dprScale, 0, 0);
+
     const fit = Math.min(cssW / world.width, cssH / world.height);
     const drawW = world.width * fit;
     const drawH = world.height * fit;
