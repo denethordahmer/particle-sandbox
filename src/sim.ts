@@ -29,6 +29,9 @@ export function idOf(name: MaterialName): CellId {
   return id;
 }
 
+const WATER_ID = idOf("Water");
+const STEAM_ID = idOf("Steam");
+
 export function nameOf(id: CellId): MaterialName | null {
   return id === EMPTY ? null : MATERIAL_NAMES[id - 1] ?? null;
 }
@@ -70,6 +73,13 @@ export interface World {
    * and forth, which showed as a flickering, permanently holed water surface.
    */
   readonly dir: Uint8Array;
+  /**
+   * What each cell was made from, as a material id. Steam made by boiling
+   * water carries Water; steam poured straight from the picker carries 0 and
+   * simply fades. Without this, poured steam "condensed" into water out of
+   * nothing and the water count grew.
+   */
+  readonly origin: Uint8Array;
   tick: number;
   readonly random: () => number;
 }
@@ -86,6 +96,7 @@ export function createWorld(width: number, height: number, seed = 1): World {
     reacted: new Uint8Array(n),
     heat: new Uint16Array(n),
     dir: new Uint8Array(n),
+    origin: new Uint8Array(n),
     tick: 0,
     random: makeRandom(seed),
   };
@@ -94,11 +105,16 @@ export function createWorld(width: number, height: number, seed = 1): World {
 const GAS_LIFE = 220;
 /** Energy lingers roughly 1-2 seconds, with flicker so flames dance. */
 const ENERGY_LIFE = 90;
+/** Lightning must survive the fall from the top of the screen to the floor. */
+const BOLT_LIFE = 150;
 
 function lifeFor(id: CellId, random: () => number): number {
   if (id === EMPTY) return 0;
   const state = PROPS[id - 1]!.state;
   if (state === "energy") {
+    // Lightning has to reach the ground before it fades, so it lives longer
+    // than a flame. Fire and spark use the normal short burn.
+    if (nameOf(id) === "Lightning") return Math.round(BOLT_LIFE * (0.8 + random() * 0.4));
     // Vary the burn time per cell; a uniform life makes flames pop out flat.
     return Math.round(ENERGY_LIFE * (0.55 + random() * 0.9));
   }
@@ -154,6 +170,9 @@ function swap(w: World, i: number, j: number): void {
   const d = w.dir[i]!;
   w.dir[i] = w.dir[j]!;
   w.dir[j] = d;
+  const o = w.origin[i]!;
+  w.origin[i] = w.origin[j]!;
+  w.origin[j] = o;
   w.moved[i] = 1;
   w.moved[j] = 1;
 }
@@ -317,6 +336,34 @@ function moveLiquid(w: World, x: number, y: number, spread: number, id: CellId):
   w.dir[y * w.width + target] = dd > 0 ? 2 : 1;
 }
 
+/**
+ * A bolt: falls fast, then forks sideways into whatever is in the way. Unlike
+ * fire it does not rise, because lightning travels from cloud to ground.
+ */
+function moveBolt(w: World, x: number, y: number, drift: number): void {
+  // A strike runs DOWN in a jagged line: it takes the diagonal nearly as often
+  // as the straight drop, which reads as forking rather than falling.
+  const dir = w.random() < 0.5 ? 1 : -1;
+  if (w.random() < 0.55) {
+    if (tryMove(w, x, y, x + dir, y + 1)) return;
+    if (tryMove(w, x, y, x - dir, y + 1)) return;
+  }
+  if (tryDown(w, x, y)) return;
+  if (tryMove(w, x, y, x + dir, y + 1)) return;
+  if (tryMove(w, x, y, x - dir, y + 1)) return;
+  // It has hit something solid: arc along that surface. `drift` is how far it
+  // crawls per tick, so a strike across a wide metal plate spreads out.
+  const steps = Math.max(1, Math.round(drift));
+  for (let s = 0; s < steps; s++) {
+    if (!tryMove(w, x, y, x + dir, y)) break;
+    x += dir;
+  }
+  for (let s = 0; s < steps; s++) {
+    if (!tryMove(w, x, y, x - dir, y)) break;
+    x -= dir;
+  }
+}
+
 function moveGas(w: World, x: number, y: number, drift: number, rise: number): void {
   // Rise first so gas climbs out of liquid rather than skimming sideways.
   // `rise` is buoyancy: light gas leaps up several cells, a heavy haze crawls.
@@ -352,8 +399,12 @@ function stepMovement(w: World): void {
           moveLiquid(w, x, y, Math.max(1, p.spread), id);
           break;
         case "gas":
-        case "energy":
           moveGas(w, x, y, p.drift, Math.max(1, p.rise));
+          break;
+        case "energy":
+          // Lightning strikes downward and spits sideways; fire licks upward.
+          if (p.rise === 0) moveBolt(w, x, y, p.drift);
+          else moveGas(w, x, y, p.drift, Math.max(1, p.rise));
           break;
         case "solid":
           // Fixed structure never moves on its own. Light solids do float up
@@ -375,10 +426,13 @@ function decay(w: World): void {
       const l = w.life[i]!;
       if (l > 1) {
         w.life[i] = l - 1;
-      } else if (p.state === "gas" && nameOf(id) === "Steam" && w.random() < 0.25) {
-        // Steam condenses back into water; other gases just fade.
-        w.cells[i] = idOf("Water");
+      } else if (p.state === "gas" && id === STEAM_ID && w.origin[i] === WATER_ID) {
+        // Steam that was boiled out of water condenses back into it. Steam
+        // poured straight from the picker has no origin and simply fades,
+        // otherwise every pour invented water out of nothing.
+        w.cells[i] = WATER_ID;
         w.life[i] = 0;
+        w.origin[i] = 0;
       } else {
         w.cells[i] = EMPTY;
         w.life[i] = 0;
@@ -456,7 +510,12 @@ function stepReactions(w: World): void {
           cost = Math.floor(PROPS[bId - 1]!.cool / 6);
         }
         if (spendFrom >= 0 && w.heat[spendFrom]! <= cost) continue;
-        if (aChanged) applyResult(w, i, out.a);
+        // Remember what a new cell came from when it is steam boiled out of
+        // water, so it can condense back into that water later.
+        if (aChanged) {
+          applyResult(w, i, out.a);
+          if (out.a === "Steam" && aName === "Water") w.origin[i] = WATER_ID;
+        }
         if (bChanged) applyResult(w, j, out.b);
         if (spendFrom >= 0) {
           const child = spendFrom === i ? j : i;
@@ -489,5 +548,6 @@ export function clearWorld(w: World): void {
   w.life.fill(0);
   w.heat.fill(0);
   w.dir.fill(0);
+  w.origin.fill(0);
   w.moved.fill(0);
 }

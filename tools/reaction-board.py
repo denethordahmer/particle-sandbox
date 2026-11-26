@@ -81,7 +81,9 @@ M["Steam"]    = m("gas",(200,212,224),"gas", 0.1, freezable=True, rise=2, drift=
 M["Cloud"]    = m("gas",(232,238,245),"gas", 0.05, rise=1, drift=0.6)
 M["Rain"]     = m("gas",(91,155,213),"liquid", 1.0, conduct=True, freezable=True, spread=3)
 M["Frost"]    = m("gas",(207,233,255),"powder", 0.2, chill=2, mob=0.8)
-M["Lightning"]= m("gas",(255,224,102),"energy", 0.0, heat=2, ignite=2, rise=1, drift=0.2)
+# Lightning is its own thing: it strikes DOWNWARD and dies quickly, rather
+# than rising like steam. `fall` gives it a downward bias in the movement code.
+M["Lightning"]= m("gas",(255,224,102),"energy", 0.0, heat=2, ignite=2, rise=0, drift=1.4)
 M["Plasma"]   = m("gas",(255,79,216),"energy", 0.0, heat=3, ignite=3, rise=2, drift=0.1)
 M["Toxic Gas"]= m("gas",(154,205,50),"gas", 0.4, acidic=True, rise=1, drift=0.55)
 # ---- fire & energy
@@ -132,7 +134,7 @@ E = [
 # water
 ("Water","Lava","R","obsidian + steam"),("Water","Fire","X","extinguished"),
 ("Water","Spark","X","extinguished"),("Water","Plasma","X","flashes to steam"),
-("Water","Molten Metal","X","steam + solid metal"),("Water","Acid","R","diluted"),
+("Water","Molten Metal","X","steam + solid metal"),("Water","Acid","." ,"they mix but neither turns into the other"),
 ("Water","Alkali","R","heats up"),("Water","Quicklime","R","hissing heat"),
 ("Water","Salt","D","dissolves"),("Water","Soil","." ,"wet soil puddles, it does not drink the water"),
 ("Water","Clay","." ,"clay is watertight once packed"),("Water","Sponge","." ,"sponge fills but holds the water next to it"),
@@ -141,7 +143,7 @@ E = [
 ("Water","Dry Ice","R","rolling fog"),('Water','Ice', "." , "ice floats, does not freeze the pool"),
 ("Water","Snow","F","freezes solid"),("Water","Frost","." ,"frost settles, water falls through"),
 ("Water","Steam","R","condenses"),("Water","Cloud","." ,"water falls through cloud"),
-("Water","Rain","R","merges"),("Water","Mercury","^","mercury sinks through"),
+("Water","Rain","X","rain joins the pool"),("Water","Mercury","^","mercury sinks through"),
 ("Water","Oil","^","oil floats"),("Water","Tar","^","tar sinks, water rides over"),
 ("Water","Phosphor","X","quenched"),("Water","Wood","." ,"wood sheds water once wet"),
 ("Water","Toxic Gas","." ,"water passes through the haze"),("Water","Lightning","R","conducts the shock"),
@@ -221,12 +223,12 @@ E = [
 ("Acid","Glass","." ,"etches only"),("Acid","Obsidian","." ,"resists acid"),
 ("Acid","Gold","." ,"resists acid"),("Acid","Slag","." ,"resists acid"),
 ("Acid","Bedrock","." ,"nothing affects bedrock"),("Acid","Crystal","D","slowly dissolves"),
-("Acid","Phosphor","B","ignites"),("Acid","Water","R","diluted"),
+("Acid","Phosphor","B","ignites"),("Acid","Water","." ,"they mix but neither turns into the other"),
 ("Acid","Salt","R","fizzes, salt breaks down"),("Acid","Toxic Gas","R","thickens"),
 ("Acid","Foam","R","breaks down"),("Acid","Steam","R","acid mist"),
 ("Acid","Mercury","R","slow attack"),("Acid","Sponge","R","soaks then eats"),
 ("Acid","Gunpowder","R","fizzes, spoils"),("Acid","Glow Dust","." ,"no reaction"),
-("Acid","Rain","R","diluted"),("Acid","Cloud","R","acid rain"),
+("Acid","Rain","." ,"they mix"),("Acid","Cloud","R","acid rain"),
 # alkali
 ("Alkali","Metal","D","attacks the metal"),("Alkali","Lead","D","attacks the metal"),
 ("Alkali","Gold","." ,"no reaction"),("Alkali","Acid","R","neutralised"),
@@ -608,7 +610,7 @@ E = [
 ("Gunpowder","Oil","X","spoils it"),("Gunpowder","Sponge","R","soaks it up"),
 ("Gunpowder","Sand","X","smothers"),("Gunpowder","Soil","X","smothers"),
 ("Snow","Fire","M","melts"),("Snow","Lava","R","steam + stone"),
-("Snow","Plasma","M","sublimates"),("Snow","Water","F","freezes"),
+("Snow","Plasma","M","sublimates"),("Snow","Water","^","floats"),
 ("Snow","Salt","M","melts"),("Snow","Acid","M","melts"),
 ("Snow","Alkali","M","melts"),("Snow","Steam","R","melts"),
 ("Snow","Bomb","X","scatters"),("Snow","Metal","R","chills it"),

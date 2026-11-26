@@ -66,8 +66,6 @@ const RULES: readonly Rule[] = [
   rule("Rain", "Salt", "Rain", null, 0.3),
   rule("Steam", "Salt", null, null, 0.2),
   rule("Cloud", "Salt", "Rain", null, 0.2),
-  rule("Water", "Acid", "Water", "Water", 0.03),
-  rule("Rain", "Acid", "Rain", "Water", 0.03),
   rule("Water", "Alkali", "Water", "Alkali"),
   rule("Water", "Quicklime", "Steam", "Stone", 0.5),
   rule("Rain", "Quicklime", "Steam", "Stone", 0.5),
@@ -90,7 +88,8 @@ const RULES: readonly Rule[] = [
   rule("Steam", "Bomb", null, "Coal", 0.2),
   // Ice does not freeze a pool solid on contact: the owner lost a reservoir
   // to this. Ice chills what it touches but does not spread itself through water.
-  rule("Water", "Snow", "Ice", "Ice", 0.2),
+  // Snow floats; it does not freeze the whole tank solid. Same lesson as Ice.
+  rule("Water", "Snow", "Water", "Snow"),
   rule("Water", "Frost", "Ice", null, 0.3),
   rule("Rain", "Ice", "Ice", "Ice", 0.002),
   rule("Rain", "Frost", "Ice", null, 0.3),
@@ -98,7 +97,8 @@ const RULES: readonly Rule[] = [
   rule("Water", "Cloud", null, "Cloud", 0.2),
   // Rain is water falling; it must not turn a pool into more water cells,
   // which would be free mass. It joins the pool.
-  rule("Water", "Rain", "Water", "Water"),
+  // Rain is water falling, so it merges into the pool instead of doubling it.
+  rule("Water", "Rain", "Water", null),
   rule("Rain", "Steam", "Rain", null, 0.3),
   rule("Steam", "Cloud", null, "Cloud", 0.3),
   rule("Rain", "Cloud", "Rain", "Cloud"),

@@ -221,7 +221,7 @@ check("ids round-trip", idOf("Toxic Gas") > 0 && idOf("Molten Metal") > 0);
     }
   }
   check("all reacting pairs have valid symmetric outcomes", bad === 0, `bad=${bad} pairs=${pairs}`);
-  check("reacting pair count matches board", pairs === 604, `pairs=${pairs}`);
+  check("reacting pair count matches board", pairs === 602, `pairs=${pairs}`);
 }
 
 // ---- invariants after chaos: ids stay in range, no crash
@@ -441,6 +441,80 @@ check("ids round-trip", idOf("Toxic Gas") > 0 && idOf("Molten Metal") > 0);
     if (after < before * 0.9) drank.push(`${nm} ${before}->${after}`);
   }
   check("nothing swallows water silently", drank.length === 0, drank.join(", "));
+}
+
+// ---- regression: no material makes water, or more of itself, beside water
+{
+  const grown: string[] = [];
+  for (const nm of MATERIAL_NAMES) {
+    if (nm === "Water") continue;
+    const w = createWorld(14, 14, 17);
+    for (let x = 0; x < 14; x++) { paint(w, x, 0, 0, "Bedrock"); paint(w, x, 13, 0, "Bedrock"); }
+    for (let y = 0; y < 14; y++) { paint(w, 0, y, 0, "Bedrock"); paint(w, 13, y, 0, "Bedrock"); }
+    for (let x = 1; x < 13; x++) for (let y = 1; y < 13; y++) paint(w, x, y, 0, x < 7 ? nm : "Water");
+    const w0 = countMaterial(w, "Water");
+    const m0 = countMaterial(w, nm);
+    let peakW = w0;
+    let peakM = m0;
+    for (let t = 0; t < 300; t++) {
+      stepWorld(w);
+      peakW = Math.max(peakW, countMaterial(w, "Water"));
+      peakM = Math.max(peakM, countMaterial(w, nm));
+    }
+    if (peakW > w0) grown.push(`${nm} made water ${w0}->${peakW}`);
+    if (peakM > m0) grown.push(`${nm} multiplied ${m0}->${peakM}`);
+  }
+  check("nothing makes water beside water", grown.length === 0, grown.join(", "));
+}
+
+// ---- regression: acid never turns into water
+{
+  for (const other of ["Water", "Rain"] as const) {
+    const w = createWorld(20, 20, 19);
+    for (let x = 0; x < 20; x++) paint(w, x, 19, 0, "Bedrock");
+    for (let x = 5; x < 15; x++) for (let y = 14; y < 19; y++) paint(w, x, y, 0, "Acid");
+    for (let x = 5; x < 15; x++) for (let y = 10; y < 14; y++) paint(w, x, y, 0, other);
+    const a0 = countMaterial(w, "Acid");
+    for (let t = 0; t < 400; t++) stepWorld(w);
+    check(`acid keeps its identity against ${other}`, countMaterial(w, "Acid") === a0,
+      `${a0} -> ${countMaterial(w, "Acid")}`);
+  }
+}
+
+// ---- regression: lightning strikes downward, never floats up
+{
+  const w = createWorld(30, 40, 1);
+  for (let x = 0; x < 30; x++) paint(w, x, 39, 0, "Bedrock");
+  paint(w, 15, 12, 1, "Lightning");
+  let highest = 39;
+  for (let t = 0; t < 40; t++) {
+    stepWorld(w);
+    for (let y = 0; y < 40; y++) for (let x = 0; x < 30; x++) {
+      if (getCell(w, x, y) === "Lightning") highest = Math.min(highest, y);
+    }
+  }
+  check("lightning does not rise", highest >= 11, `highest cell y=${highest}, started at y=12`);
+
+  const w2 = createWorld(30, 40, 2);
+  for (let x = 0; x < 30; x++) paint(w2, x, 39, 0, "Bedrock");
+  paint(w2, 15, 1, 1, "Lightning");
+  for (let t = 0; t < 90; t++) stepWorld(w2);
+  let low = 0;
+  for (let y = 36; y < 39; y++) for (let x = 0; x < 30; x++) if (getCell(w2, x, y) === "Lightning") low++;
+  check("lightning reaches the ground", low > 0, `cells near floor=${low}`);
+}
+
+// ---- regression: snow floats on water instead of freezing the tank
+{
+  const w = createWorld(20, 30, 6);
+  for (let x = 0; x < 20; x++) paint(w, x, 29, 0, "Bedrock");
+  for (let y = 10; y < 29; y++) for (let x = 0; x < 20; x++) paint(w, x, y, 0, "Water");
+  const w0 = countMaterial(w, "Water");
+  paint(w, 10, 12, 1, "Snow");
+  for (let t = 0; t < 200; t++) stepWorld(w);
+  // The snowfall itself becomes a little ice; the pool around it must survive.
+  check("snow does not freeze a pool solid", countMaterial(w, "Water") >= w0 - 6,
+    `water ${w0} -> ${countMaterial(w, "Water")}, ice=${countMaterial(w, "Ice")}`);
 }
 
 console.log(`${passed} passed, ${failed} failed`);
